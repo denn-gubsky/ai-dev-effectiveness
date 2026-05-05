@@ -1,4 +1,4 @@
-"""Optional integration with ast-index (https://github.com/asgardiandevs/ast-index).
+"""Optional integration with ast-index (https://github.com/defendend/Claude-ast-index-search).
 
 When `ast-index` is on PATH, we run `ast-index build` against the target repo
 before invoking the judge. The bundled effort-judge subagent's tool allowlist
