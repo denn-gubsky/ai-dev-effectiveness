@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from importlib import resources
@@ -76,7 +77,8 @@ def suggest_roles(
     target: Path,
     workspace: Path,
     model: str = "sonnet",
-    timeout_sec: int = 180,
+    timeout_sec: int = 600,
+    progress_interval_sec: int = 15,
 ) -> RolesSuggestion:
     """Run `claude --print` with the bundled roles-architect agent against `target`.
 
@@ -132,10 +134,17 @@ def suggest_roles(
     ]
 
     start = time.monotonic()
-    proc = subprocess.run(
-        cmd, cwd=str(target), capture_output=True, text=True,
-        timeout=timeout_sec, check=False,
+    stop_event, progress_thread = _start_progress_printer(
+        label="roles-architect", interval_sec=progress_interval_sec, start=start,
     )
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(target), capture_output=True, text=True,
+            timeout=timeout_sec, check=False,
+        )
+    finally:
+        stop_event.set()
+        progress_thread.join(timeout=1.0)
     elapsed = time.monotonic() - start
 
     if proc.returncode != 0:
@@ -193,6 +202,47 @@ def render_yaml(suggestion: RolesSuggestion, indent: str = "  ") -> str:
             f"loc: {loc}, pm_low: {pm_low}, pm_high: {pm_high}, color: {_yaml_str(color)} }}"
         )
     return "\n".join(lines) + "\n"
+
+
+def _start_progress_printer(
+    label: str,
+    interval_sec: int,
+    start: float,
+) -> tuple[threading.Event, threading.Thread]:
+    """Spawn a daemon thread that prints elapsed time every `interval_sec`.
+
+    Returns (stop_event, thread). The caller MUST call `stop_event.set()` and
+    `thread.join()` to clean up (use a try/finally around the work being
+    timed). The thread is daemonized so it can't block process exit.
+
+    The first message fires after `interval_sec` seconds — not immediately —
+    so short-running operations don't get cosmetic noise.
+    """
+    stop_event = threading.Event()
+
+    def _loop() -> None:
+        # TODO(dennis): tune the message format to your taste. Current style is
+        # `  (label working, Ns elapsed...)` printed on a fresh line every
+        # interval. Alternatives worth considering:
+        #
+        #   1. In-place update: print "\r  ... Ns elapsed" with end="" and a
+        #      final newline at the end. Quieter but doesn't survive log tee.
+        #   2. Verbose phases: parse `--output-format stream-json` events and
+        #      print "reading X.go", "running git ls-files", etc. Way more
+        #      informative but couples to claude's stream schema.
+        #   3. Heartbeat dot: just print "." every interval. Minimal noise
+        #      but tells you nothing about absolute time.
+        #
+        # The current implementation is option 0: explicit, log-friendly,
+        # honest about silence between intervals. Override here if you want
+        # something else.
+        while not stop_event.wait(interval_sec):
+            elapsed = int(time.monotonic() - start)
+            print(f"  ({label} working, {elapsed}s elapsed...)", flush=True)
+
+    thread = threading.Thread(target=_loop, daemon=True)
+    thread.start()
+    return stop_event, thread
 
 
 def _yaml_str(s: str) -> str:

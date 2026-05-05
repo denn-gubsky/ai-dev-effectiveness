@@ -237,8 +237,9 @@ def _run_judge_dry_run(target: str, cfg, workspace: str | None, out_dir: str | N
                    "if it doesn't exist.")
 @click.option("--model", "model", default="sonnet",
               help="Claude model name (default: sonnet).")
-@click.option("--timeout", "timeout_sec", default=180, type=int,
-              help="Subprocess timeout in seconds (default: 180).")
+@click.option("--timeout", "timeout_sec", default=600, type=int,
+              help="Subprocess timeout in seconds (default: 600 = 10 minutes). "
+                   "Bump to 1800+ for very large repos (>500K LOC).")
 def suggest_roles_cmd(target: str, workspace: str | None, out_path: str | None,
                       apply_to_config: bool, model: str, timeout_sec: int) -> None:
     """Survey TARGET and propose specialist roles for the top-down comparison.
@@ -262,7 +263,8 @@ def suggest_roles_cmd(target: str, workspace: str | None, out_path: str | None,
         sys.exit(1)
 
     click.echo(f"Surveying {target_path} via the roles-architect subagent...")
-    click.echo("(this typically takes 60-180 seconds)")
+    click.echo("(60-90s for small repos; 5-10 minutes for 100K+ LOC; "
+               f"bump --timeout if it hits the {timeout_sec}s limit)")
     click.echo("")
 
     try:
