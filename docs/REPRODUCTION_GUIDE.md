@@ -76,6 +76,38 @@ To check what the judge would do without spending tokens:
 ai-dev-effectiveness analyze ~/work/your-repo --judge claude-cli --judge-dry-run
 ```
 
+### Other judge providers
+
+If you'd rather use a metered API instead of your Claude subscription, or if
+your policy requires fully local inference, four other providers are wired
+up:
+
+```bash
+# Anthropic API (separate billing relationship)
+pipx install 'git+https://github.com/denn-gubsky/ai-dev-effectiveness#egg=ai-dev-effectiveness[judge-anthropic]'
+export ANTHROPIC_API_KEY=sk-ant-...
+ai-dev-effectiveness analyze REPO --judge anthropic-api
+
+# OpenAI (gpt-4o or newer required for structured outputs)
+pipx install 'git+https://github.com/denn-gubsky/ai-dev-effectiveness#egg=ai-dev-effectiveness[judge-openai]'
+export OPENAI_API_KEY=sk-...
+ai-dev-effectiveness analyze REPO --judge openai --judge-model gpt-4o
+
+# Local model via Ollama (privacy-preserving, uses your hardware)
+pipx install 'git+https://github.com/denn-gubsky/ai-dev-effectiveness#egg=ai-dev-effectiveness[judge-ollama]'
+ollama pull llama3.1:70b
+ai-dev-effectiveness analyze REPO --judge ollama --judge-model llama3.1:70b
+
+# Deterministic stub (CI tests, no network, LOC-based fake judgment)
+ai-dev-effectiveness analyze REPO --judge stub
+```
+
+The API providers receive the diff inline in the user message rather than
+running `git show` themselves, so they have less agentic context than
+`claude-cli`. For most commits this is fine; for large cross-cutting
+refactors `claude-cli` still produces meaningfully better estimates because
+the bundled subagent can probe call sites via ast-index / Grep.
+
 ## Configuring specialist roles
 
 This is the highest-leverage step for a credible top-down comparison. Two

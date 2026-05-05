@@ -198,18 +198,28 @@ _DEFAULT_JUDGE_TOOLS = (
     "Read,Grep,Glob,Bash(git show:*),Bash(git diff:*),Bash(git log:*),mcp__ast-index__*"
 )
 
-_JUDGMENT_JSON_SCHEMA = (
-    '{"type":"object",'
-    '"properties":{'
-    '"human_hours":{"type":"number","minimum":0},'
-    '"ai_assisted_hours":{"type":"number","minimum":0},'
-    '"complexity":{"enum":["trivial","small","medium","large","architectural"]},'
-    '"confidence":{"enum":["low","medium","high"]},'
-    '"rationale":{"type":"string","maxLength":300}'
-    '},'
-    '"required":["human_hours","ai_assisted_hours","complexity","confidence","rationale"],'
-    '"additionalProperties":false}'
-)
+# Single source of truth for the judgment schema — every provider derives its
+# own format-specific representation from this dict.
+_JUDGMENT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "human_hours": {"type": "number", "minimum": 0},
+        "ai_assisted_hours": {"type": "number", "minimum": 0},
+        "complexity": {
+            "type": "string",
+            "enum": ["trivial", "small", "medium", "large", "architectural"],
+        },
+        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+        "rationale": {"type": "string", "maxLength": 300},
+    },
+    "required": [
+        "human_hours", "ai_assisted_hours", "complexity", "confidence", "rationale",
+    ],
+    "additionalProperties": False,
+}
+
+# String form for `claude --print --json-schema <STR>`.
+_JUDGMENT_JSON_SCHEMA = json.dumps(_JUDGMENT_SCHEMA, separators=(",", ":"))
 
 
 def _read_agent_definition(path: Path) -> tuple[str, dict]:
@@ -296,12 +306,356 @@ def make_provider(cfg: JudgeConfig) -> JudgeProvider:
     if cfg.provider == "stub":
         return StubJudge(cfg)
     if cfg.provider == "anthropic-api":
-        raise NotImplementedError("anthropic-api provider not implemented yet")
+        return AnthropicApiJudge(cfg)
     if cfg.provider == "openai":
-        raise NotImplementedError("openai provider not implemented yet")
+        return OpenAiJudge(cfg)
     if cfg.provider == "ollama":
-        raise NotImplementedError("ollama provider not implemented yet")
+        return OllamaJudge(cfg)
     raise ValueError(f"Unknown judge provider: {cfg.provider}")
+
+
+# ---------------------------------------------------------------------------
+# API provider helpers (anthropic-api, openai, ollama)
+# ---------------------------------------------------------------------------
+
+def _fetch_commit_for_judging(sha: str, repo: Path, max_lines: int = 800) -> str:
+    """Run `git show --stat -p` and return a possibly-truncated string suitable
+    for an LLM prompt.
+
+    API providers don't have agentic tool access in our setup, so we feed them
+    the diff inline. Truncation guards against pathological mega-commits that
+    would blow context budgets and inflate cost; the trailing marker tells the
+    model what was cut so it can downgrade confidence appropriately.
+    """
+    proc = subprocess.run(
+        ["git", "show", "--stat", "--patch", "--no-color", sha],
+        cwd=str(repo), capture_output=True, text=True, check=True,
+    )
+    text = proc.stdout
+    lines = text.split("\n")
+    if len(lines) <= max_lines:
+        return text
+    head = "\n".join(lines[:max_lines])
+    return f"{head}\n\n<<<TRUNCATED — {len(lines) - max_lines} more lines hidden from this prompt>>>\n"
+
+
+def _build_judging_prompts(cfg: JudgeConfig, repo: Path, sha: str) -> tuple[str, str]:
+    """Construct (system_prompt, user_prompt) for an API-provider judgment.
+
+    Identical to the claude-cli setup except the diff is embedded in the user
+    message rather than fetched by the agent at runtime.
+    """
+    agent_path = Path(cfg.agent_path)
+    agent_full_path = agent_path if agent_path.is_absolute() else (repo / agent_path)
+    if not agent_full_path.exists():
+        raise RuntimeError(
+            f"Effort-judge agent not installed at {agent_full_path}. "
+            f"Run `ai-dev-effectiveness init-judge` from your analyzer workspace."
+        )
+    agent_body, _ = _read_agent_definition(agent_full_path)
+
+    skill_path = Path(cfg.skill_path)
+    skill_full_path = skill_path if skill_path.is_absolute() else (repo / skill_path)
+    skill_body = ""
+    if skill_full_path.exists():
+        skill_body, _ = _read_agent_definition(skill_full_path)
+
+    system_prompt = agent_body
+    if skill_body:
+        system_prompt += "\n\n## Skill: effort-estimation rubric\n\n" + skill_body
+    # API providers don't run `git show` themselves, so override the agent's
+    # "step 1: run `git show <sha>`" instruction.
+    system_prompt += (
+        "\n\n## Override for API mode\n"
+        "You DO NOT have shell access in this invocation. The user message "
+        "below contains the full commit diff and stat. Judge the change "
+        "directly from that text. Do not request additional tool calls."
+    )
+
+    diff_text = _fetch_commit_for_judging(sha, repo)
+    user_prompt = (
+        f"Estimate engineering effort for commit {sha}.\n\n"
+        f"=== git show --stat --patch {sha} ===\n{diff_text}\n=== end ===\n\n"
+        f"Output ONLY the JSON object matching the required schema."
+    )
+    return system_prompt, user_prompt
+
+
+def _judge_result_from_dict(d: dict[str, Any], sha: str) -> JudgeResult:
+    """Build a JudgeResult from a dict that already conforms to _JUDGMENT_SCHEMA.
+
+    Centralizes type coercion so each provider doesn't reimplement it.
+    """
+    return JudgeResult(
+        sha=sha,
+        human_hours=float(d["human_hours"]),
+        ai_assisted_hours=float(d["ai_assisted_hours"]),
+        complexity=d["complexity"],
+        confidence=d.get("confidence", "medium"),
+        rationale=str(d.get("rationale", ""))[:300],
+    )
+
+
+# ---------------------------------------------------------------------------
+# anthropic-api provider — Claude via the Anthropic SDK + ANTHROPIC_API_KEY
+# ---------------------------------------------------------------------------
+
+class AnthropicApiJudge:
+    """Anthropic-API provider: forces structured output via the tool_use pattern.
+
+    We define a single tool whose `input_schema` IS our judgment schema, then
+    set `tool_choice` to that tool. The model is forced to populate the tool
+    input with a schema-conforming JSON object, which we lift directly from
+    `tool_use.input`.
+
+    Requires:
+      - `pip install ai-dev-effectiveness[judge-anthropic]` (or the `anthropic` package)
+      - `ANTHROPIC_API_KEY` env var
+    """
+
+    _DEFAULT_MODEL = "claude-sonnet-4-5"
+    _MAX_TOKENS = 2048
+    _TOOL_NAME = "submit_effort_judgment"
+
+    def __init__(self, cfg: JudgeConfig):
+        self.cfg = cfg
+        try:
+            import anthropic  # noqa: F401
+        except ImportError as e:
+            raise RuntimeError(
+                "anthropic SDK not installed. Run: "
+                "pip install ai-dev-effectiveness[judge-anthropic]"
+            ) from e
+        import os
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY env var is not set. Either set it, or use "
+                "--judge claude-cli to use your Claude Code subscription instead."
+            )
+
+    def name(self) -> str:
+        return "anthropic-api"
+
+    def model_id(self) -> str:
+        return self._normalize_model(self.cfg.model)
+
+    @classmethod
+    def _normalize_model(cls, alias: str) -> str:
+        """Translate the short aliases (sonnet/opus/haiku) we use elsewhere
+        into Anthropic's full model IDs. Pass-through for anything that already
+        looks like a full model ID."""
+        if alias in ("sonnet", "claude-sonnet"):
+            return cls._DEFAULT_MODEL
+        if alias in ("opus", "claude-opus"):
+            return "claude-opus-4-5"
+        if alias in ("haiku", "claude-haiku"):
+            return "claude-haiku-4-5"
+        return alias
+
+    def judge(self, sha: str, repo: Path) -> JudgeResult:
+        from anthropic import Anthropic
+
+        system_prompt, user_prompt = _build_judging_prompts(self.cfg, repo, sha)
+
+        client = Anthropic()
+        start = time.monotonic()
+        message = client.messages.create(
+            model=self.model_id(),
+            max_tokens=self._MAX_TOKENS,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+            tools=[{
+                "name": self._TOOL_NAME,
+                "description": "Submit your calibrated effort estimate for this commit.",
+                "input_schema": _JUDGMENT_SCHEMA,
+            }],
+            tool_choice={"type": "tool", "name": self._TOOL_NAME},
+        )
+        elapsed = time.monotonic() - start
+
+        for block in message.content:
+            if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == self._TOOL_NAME:
+                result = _judge_result_from_dict(dict(block.input), sha)
+                result.elapsed_sec = elapsed
+                return result
+
+        raise ValueError(
+            f"Anthropic API returned no tool_use block for {sha[:8]}; "
+            f"stop_reason={getattr(message, 'stop_reason', '?')}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# openai provider — OpenAI / Azure-compatible models via the openai SDK
+# ---------------------------------------------------------------------------
+
+class OpenAiJudge:
+    """OpenAI-compatible provider using `response_format` + JSON schema.
+
+    Uses the structured-outputs feature: `response_format={"type": "json_schema",
+    "json_schema": {"strict": True, "schema": ...}}`. Requires gpt-4o-class
+    models or newer; older models will get a 4xx from the API (we surface as
+    RuntimeError).
+
+    Requires:
+      - `pip install ai-dev-effectiveness[judge-openai]`
+      - `OPENAI_API_KEY` env var
+      - Model that supports structured outputs (gpt-4o, gpt-4o-mini, gpt-5*)
+    """
+
+    _DEFAULT_MODEL = "gpt-4o-2024-11-20"
+    _MAX_TOKENS = 2048
+    _SCHEMA_NAME = "EffortJudgment"
+
+    def __init__(self, cfg: JudgeConfig):
+        self.cfg = cfg
+        try:
+            import openai  # noqa: F401
+        except ImportError as e:
+            raise RuntimeError(
+                "openai SDK not installed. Run: "
+                "pip install ai-dev-effectiveness[judge-openai]"
+            ) from e
+        import os
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise RuntimeError("OPENAI_API_KEY env var is not set.")
+
+    def name(self) -> str:
+        return "openai"
+
+    def model_id(self) -> str:
+        # Default-alias fallthrough: if the user keeps the cross-provider
+        # default "sonnet", swap in our chosen GPT-4o snapshot.
+        if self.cfg.model in ("sonnet", "opus", "haiku") or not self.cfg.model:
+            return self._DEFAULT_MODEL
+        return self.cfg.model
+
+    def judge(self, sha: str, repo: Path) -> JudgeResult:
+        from openai import OpenAI
+
+        system_prompt, user_prompt = _build_judging_prompts(self.cfg, repo, sha)
+
+        client = OpenAI()
+        start = time.monotonic()
+        completion = client.chat.completions.create(
+            model=self.model_id(),
+            max_tokens=self._MAX_TOKENS,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": self._SCHEMA_NAME,
+                    "strict": True,
+                    "schema": _JUDGMENT_SCHEMA,
+                },
+            },
+        )
+        elapsed = time.monotonic() - start
+
+        choice = completion.choices[0]
+        if choice.message.refusal:
+            raise ValueError(
+                f"OpenAI refused to judge {sha[:8]}: {choice.message.refusal}"
+            )
+        content = choice.message.content or ""
+        if not content:
+            raise ValueError(
+                f"OpenAI returned empty content for {sha[:8]}; "
+                f"finish_reason={choice.finish_reason}"
+            )
+        d = json.loads(content)
+        result = _judge_result_from_dict(d, sha)
+        result.elapsed_sec = elapsed
+        return result
+
+
+# ---------------------------------------------------------------------------
+# ollama provider — local models via the Ollama API
+# ---------------------------------------------------------------------------
+
+class OllamaJudge:
+    """Local-model provider via Ollama using `format=schema` for JSON output.
+
+    Sends the JSON schema dict as the `format` parameter to `chat()`. Modern
+    ollama (≥0.5) constrains generation to match the schema. For older models
+    or older ollama versions, this gracefully degrades to "JSON-ish" output;
+    we still parse with the same defensive helper as the cli judge.
+
+    Requires:
+      - `pip install ai-dev-effectiveness[judge-ollama]`
+      - A running ollama server (default `http://localhost:11434`; override
+        with the `OLLAMA_HOST` env var)
+      - The model already pulled locally (`ollama pull llama3.1:70b`)
+    """
+
+    _DEFAULT_MODEL = "llama3.1:70b"
+
+    def __init__(self, cfg: JudgeConfig):
+        self.cfg = cfg
+        try:
+            import ollama  # noqa: F401
+        except ImportError as e:
+            raise RuntimeError(
+                "ollama SDK not installed. Run: "
+                "pip install ai-dev-effectiveness[judge-ollama]"
+            ) from e
+
+    def name(self) -> str:
+        return "ollama"
+
+    def model_id(self) -> str:
+        # Ollama model names look like "llama3.1:70b" — if the user kept the
+        # cross-provider default "sonnet", they didn't pick an ollama model;
+        # fall through to our default.
+        if self.cfg.model in ("sonnet", "opus", "haiku") or not self.cfg.model:
+            return self._DEFAULT_MODEL
+        return self.cfg.model
+
+    def judge(self, sha: str, repo: Path) -> JudgeResult:
+        import os
+
+        from ollama import Client
+
+        system_prompt, user_prompt = _build_judging_prompts(self.cfg, repo, sha)
+
+        client = Client(host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"))
+        start = time.monotonic()
+        response = client.chat(
+            model=self.model_id(),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            format=_JUDGMENT_SCHEMA,
+            options={"temperature": 0},
+        )
+        elapsed = time.monotonic() - start
+
+        # ollama 0.4+ returns a typed object, 0.3 returns a dict — handle both.
+        msg = response.get("message", {}) if isinstance(response, dict) else response.message
+        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+        if not content:
+            raise ValueError(f"Ollama returned empty content for {sha[:8]}.")
+
+        # ollama may return JSON with extra whitespace or a markdown fence;
+        # use the same defensive parser as the cli judge.
+        for candidate in _candidate_json_blocks(content):
+            try:
+                d = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(d, dict) and "human_hours" in d:
+                result = _judge_result_from_dict(d, sha)
+                result.elapsed_sec = elapsed
+                return result
+
+        raise ValueError(
+            f"Could not parse Ollama judgment for {sha[:8]} from "
+            f"{len(content)} chars. First 200: {content[:200]!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +786,7 @@ class JudgeCache:
 # Bump this when the judge invocation logic changes in a way that should
 # invalidate cached judgments. (Cache also auto-invalidates when the bundled
 # SKILL.md or agent.md content changes.)
-_JUDGE_LOGIC_VERSION = "v3-output-format-json-structured-output"
+_JUDGE_LOGIC_VERSION = "v4-api-providers-anthropic-openai-ollama"
 
 
 def _prompt_version() -> str:

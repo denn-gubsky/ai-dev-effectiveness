@@ -167,16 +167,56 @@ Useful `analyze` flags:
 | `--no-ast-index` | Skip the `ast-index rebuild` step. |
 | `--config FILE` | Use a non-standard config path (otherwise auto-picked). |
 
-## Optional providers
+## Judge providers
 
-The default AI judge uses your Claude Code CLI subscription (no API key, no metered billing, no diffs leaving your machine). Other providers exist for users who'd rather pay metered:
+Five providers are available; pick whichever matches your billing model and privacy posture.
 
-- `--judge anthropic-api` — uses `ANTHROPIC_API_KEY` env var
-- `--judge openai` — uses `OPENAI_API_KEY` env var
-- `--judge ollama` — local model via Ollama (privacy-preserving)
-- `--judge stub` — deterministic, used in CI tests
+| Flag | What it uses | Cost | Privacy |
+|---|---|---|---|
+| `--judge claude-cli` | Your Claude Code CLI subscription | Included | Diffs stay local |
+| `--judge anthropic-api` | Anthropic API + `ANTHROPIC_API_KEY` | Metered per-token | Diffs sent to api.anthropic.com |
+| `--judge openai` | OpenAI API + `OPENAI_API_KEY` | Metered per-token | Diffs sent to api.openai.com |
+| `--judge ollama` | Local Ollama server | Free (your hardware) | Diffs stay local |
+| `--judge stub` | Deterministic LOC-based fake | n/a | n/a (CI tests only) |
 
-The `anthropic-api`, `openai`, and `ollama` providers are stubbed in v1.0 and will ship in a follow-up minor release.
+**Default is `claude-cli`** — same Claude Code session you already use, no extra signup, no diffs leaving your machine. The other providers exist for teams that prefer API-key billing, want to use a non-Anthropic model, or have policies that require running everything locally.
+
+### `--judge anthropic-api`
+
+```bash
+pipx install 'git+https://github.com/denn-gubsky/ai-dev-effectiveness#egg=ai-dev-effectiveness[judge-anthropic]'
+export ANTHROPIC_API_KEY=sk-ant-...
+ai-dev-effectiveness analyze ~/work/your-repo --judge anthropic-api
+```
+
+Defaults to `claude-sonnet-4-5`. Override with `--judge-model claude-opus-4-5` or any full model ID. Forces structured output via the tool-use pattern (a single tool whose `input_schema` is the judgment schema, with `tool_choice` set to that tool).
+
+### `--judge openai`
+
+```bash
+pipx install 'git+https://github.com/denn-gubsky/ai-dev-effectiveness#egg=ai-dev-effectiveness[judge-openai]'
+export OPENAI_API_KEY=sk-...
+ai-dev-effectiveness analyze ~/work/your-repo --judge openai --judge-model gpt-4o
+```
+
+Requires gpt-4o or newer (older models don't support `response_format` with strict JSON schema). Defaults to `gpt-4o-2024-11-20`. The provider uses OpenAI's structured-outputs feature with `strict: true`, so the response is guaranteed to conform to the schema.
+
+### `--judge ollama`
+
+```bash
+pipx install 'git+https://github.com/denn-gubsky/ai-dev-effectiveness#egg=ai-dev-effectiveness[judge-ollama]'
+ollama pull llama3.1:70b
+ai-dev-effectiveness analyze ~/work/your-repo --judge ollama --judge-model llama3.1:70b
+```
+
+Connects to `http://localhost:11434` by default (override via `OLLAMA_HOST` env var). Uses ollama's `format=<json-schema>` parameter to constrain output. Quality varies by model — `llama3.1:70b` and `qwen2.5-coder:32b` give reasonable judgments; smaller models tend to under-call complexity tiers.
+
+### Differences vs `claude-cli`
+
+- **`claude-cli`** runs the bundled subagent with full tool access (Read, Grep, `git show`, ast-index). The agent investigates the diff dynamically, follows callers, etc.
+- **API providers** receive the diff embedded in the user message (truncated at 800 lines). They have no shell access and judge from the diff text alone.
+
+For most commits the difference is negligible — the diff itself contains the signal. For large refactors that ripple across many call sites, `claude-cli` produces meaningfully better estimates because the agent can probe the blast radius.
 
 ## Case study
 
