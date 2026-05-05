@@ -112,11 +112,15 @@ class ClaudeCliJudge:
         return self.cfg.model
 
     def judge(self, sha: str, repo: Path) -> JudgeResult:
-        agent_full_path = repo / self.cfg.agent_path
+        # agent_path may be absolute (analyzer-workspace mode, recommended) or
+        # relative-to-target (legacy single-repo mode). Resolve accordingly.
+        agent_path = Path(self.cfg.agent_path)
+        agent_full_path = agent_path if agent_path.is_absolute() else (repo / agent_path)
         if not agent_full_path.exists():
             raise RuntimeError(
                 f"Effort-judge agent not installed at {agent_full_path}. "
-                f"Run: ai-dev-effectiveness init-judge"
+                f"Run `ai-dev-effectiveness init-judge` from your analyzer "
+                f"workspace (the directory you run analyses from)."
             )
 
         prompt = (
@@ -130,6 +134,9 @@ class ClaudeCliJudge:
             "--agent", str(agent_full_path),
             prompt,
         ]
+        # Subprocess CWD = target repo. The agent's tools (Read, Grep, git show)
+        # operate on target content; only the agent definition itself is loaded
+        # from the analyzer workspace.
         start = time.monotonic()
         proc = subprocess.run(
             cmd, cwd=str(repo), capture_output=True, text=True,

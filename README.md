@@ -8,12 +8,19 @@
 
 ```bash
 pipx install git+https://github.com/denn-gubsky/ai-dev-effectiveness
-cd /path/to/your/repo
-ai-dev-effectiveness analyze .
-open effectiveness-report.html
+
+# Pick a folder you'll run analyses from. NOT one of your project repos.
+mkdir -p ~/dev-effectiveness && cd ~/dev-effectiveness
+
+# Once: install the bundled judge subagent into THIS workspace.
+ai-dev-effectiveness init-judge
+
+# Now analyze any repo you want. Reports go to ./<target_basename>/.
+ai-dev-effectiveness analyze /path/to/your/repo
+open ./your-repo/effectiveness-report.html
 ```
 
-That's it. Zero config required for the first run — the tool auto-detects domains from your top-level dirs, classifies commits by language, and identifies AI co-authors from a built-in registry covering Claude (Opus/Sonnet/Haiku), GitHub Copilot, Cursor, Codex, Aider, Cody, Continue, Windsurf, Codeium, Tabnine, and Devin.
+The analyzer **never writes inside the target repo** — the bundled subagent, the judgment cache, and all reports live in your local workspace. Each target gets its own subfolder so you can compare repos side by side.
 
 ## What it measures
 
@@ -28,13 +35,38 @@ When all three agree within 2x, the multiplier is defensible. When they diverge,
 ## Optional: AI judge for diff-aware estimates
 
 ```bash
-ai-dev-effectiveness init-judge          # installs the bundled subagent into .claude/
-ai-dev-effectiveness analyze . --judge claude-cli
+cd ~/dev-effectiveness          # the workspace where init-judge ran
+ai-dev-effectiveness analyze /path/to/your/repo --judge claude-cli
 ```
 
-The judge uses your existing Claude Code CLI session — no API key, no metered billing, no diffs leaving your machine. If you have [ast-index](https://github.com/defendend/Claude-ast-index-search) MCP configured, it's used for symbol-level lookups.
+The judge uses your existing Claude Code CLI session — no API key, no metered billing, no diffs leaving your machine. If you have [ast-index](https://github.com/asgardiandevs/ast-index) on your `PATH`, the analyzer runs `ast-index build` against the target before the judge starts so the bundled subagent can use `mcp__ast-index__*` tools for symbol-level lookups (much faster than grep-then-read for "find callers of this function").
 
-Other providers: `--judge anthropic-api` (separate API key), `--judge openai`, `--judge ollama` (local model).
+Other providers (opt-in): `--judge anthropic-api` (separate API key), `--judge openai`, `--judge ollama` (local model).
+
+Disable ast-index for a run: `--no-ast-index`.
+
+## Workspace layout
+
+```
+~/dev-effectiveness/                      # your analyzer workspace
+├── .claude/
+│   ├── agents/effort-judge.md           # ← installed by `init-judge`
+│   ├── skills/effort-estimation/SKILL.md
+│   └── settings.recommended.json
+├── ai_dev.yaml                          # optional: custom config (init-config)
+├── repo-a/                              # output for one analyzed target
+│   ├── effectiveness-report.html
+│   ├── effectiveness-report.json
+│   └── .ai-dev-effectiveness-cache/
+└── repo-b/                              # another target's outputs
+    └── ...
+```
+
+Useful flags:
+
+- `--workspace PATH` — override the analyzer workspace (default: `$PWD`).
+- `--out-dir PATH` — override where this run's reports go.
+- `--judge-dry-run` — show what the judge would do (sample size, cost, paths) without invoking it.
 
 ## Case study
 
@@ -42,9 +74,9 @@ Other providers: `--judge anthropic-api` (separate API key), `--judge openai`, `
 
 ## Customize
 
-- `ai-dev-effectiveness init-config` — drops `ai_dev.yaml` into your repo
-- Define your specialist roles, effort constants, agent signatures
-- See [`docs/REPRODUCTION_GUIDE.md`](docs/REPRODUCTION_GUIDE.md) and [`docs/config-reference.md`](docs/config-reference.md)
+- `ai-dev-effectiveness init-config` — drops `ai_dev.yaml` into your workspace.
+- Define your specialist roles, effort constants, agent signatures.
+- See [`docs/REPRODUCTION_GUIDE.md`](docs/REPRODUCTION_GUIDE.md) and [`docs/config-reference.md`](docs/config-reference.md).
 
 ## License
 

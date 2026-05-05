@@ -17,6 +17,7 @@ import pandas as pd
 
 from . import (
     agent_detector,
+    ast_index,
     domain_classifier,
     effort_estimator,
     git_extractor,
@@ -46,6 +47,11 @@ class AnalysisResult:
     loc: pd.DataFrame
     metrics: _metrics.MetricsBundle
     figures: report_renderer.Figures
+    workspace: Path = Path(".")
+    out_dir: Path = Path(".")
+
+    def default_out_path(self, fmt: str) -> Path:
+        return self.out_dir / f"effectiveness-report.{fmt}"
 
     def to_html(self, path: str | Path | None = None) -> str:
         html = report_renderer.render_html(self.figures, self.config.project.name)
@@ -74,19 +80,37 @@ class AnalysisResult:
 def analyze(
     repo: str | Path = ".",
     config: str | Path | Config | None = None,
+    workspace: str | Path | None = None,
+    out_dir: str | Path | None = None,
 ) -> AnalysisResult:
     """Run the full pipeline against `repo` and return an `AnalysisResult`.
 
     Args:
-        repo: path to a git repo. Walks up to find .git/.
+        repo: path to the target git repo. Walks up to find .git/. Read-only.
         config: path to ai_dev.yaml, an already-loaded Config, or None for defaults.
+        workspace: analyzer workspace where the bundled judge agent lives
+                   (`<workspace>/.claude/agents/effort-judge.md`). Defaults to cwd.
+        out_dir: where to write the report and cache. Defaults to:
+                   - `cwd` if the resolved target is the same as cwd, OR
+                   - `cwd/<basename(target)>` if the target is elsewhere.
+                 Either way, NOTHING is ever written to the target repo.
     """
     repo_path = _find_repo(Path(repo).resolve())
+    workspace_path = Path(workspace).resolve() if workspace else Path.cwd().resolve()
+    out_dir_path = _resolve_out_dir(out_dir, workspace_path, repo_path)
+    out_dir_path.mkdir(parents=True, exist_ok=True)
 
     if isinstance(config, Config):
         cfg = config
     else:
         cfg = _config.load(config) if config is not None else Config()
+
+    # Reroute judge artefacts to the analyzer workspace and the per-target
+    # output dir, regardless of what the YAML config said. This guarantees
+    # nothing lands inside the target repo.
+    cfg.judge.cache_dir = str(out_dir_path / ".ai-dev-effectiveness-cache")
+    cfg.judge.agent_path = str(workspace_path / ".claude/agents/effort-judge.md")
+    cfg.judge.skill_path = str(workspace_path / ".claude/skills/effort-estimation/SKILL.md")
 
     # 1. extract commits
     commits = git_extractor.extract_commits(repo_path)
@@ -130,6 +154,11 @@ def analyze(
     # 7. optional AI judge — runs only if config.judge.enabled
     judge_summary_dict = None
     if cfg.judge.enabled:
+        # Best-effort: build the ast-index for the target so the bundled
+        # subagent can use mcp__ast-index__* tools for symbol-level lookups.
+        ok, msg = ast_index.build(repo_path)
+        print(f"  ast-index: {msg}", flush=True)
+
         judge_cfg = _judge.JudgeConfig(
             provider=cfg.judge.provider, model=cfg.judge.model,
             sample_size=cfg.judge.sample_size, judge_all=cfg.judge.judge_all,
@@ -163,6 +192,7 @@ def analyze(
 
     return AnalysisResult(
         config=cfg, commits=commits, loc=loc_df, metrics=bundle, figures=figures,
+        workspace=workspace_path, out_dir=out_dir_path,
     )
 
 
@@ -173,6 +203,19 @@ def _find_repo(start: Path) -> Path:
             return p
         p = p.parent
     raise RuntimeError(f"No git repository found at or above {start}")
+
+
+def _resolve_out_dir(out_dir: str | Path | None, workspace: Path, target: Path) -> Path:
+    """Decide where to write reports and cache.
+
+    Default rule: workspace itself if target == workspace; else workspace/<basename(target)>.
+    Explicit `out_dir` always wins.
+    """
+    if out_dir is not None:
+        return Path(out_dir).resolve()
+    if target == workspace:
+        return workspace
+    return workspace / target.name
 
 
 def _project_months(commits: pd.DataFrame) -> float | None:

@@ -74,10 +74,23 @@ The notebook walks through ten sections:
 
 ## Reproducing this on your own repo
 
-1. `pipx install git+https://github.com/denn-gubsky/ai-dev-effectiveness`
-2. `cd /path/to/your/repo`
-3. `ai-dev-effectiveness init-config && $EDITOR ai_dev.yaml` — edit the
-   `domains` and `roles` sections to match your project.
-4. `ai-dev-effectiveness analyze . --config ai_dev.yaml`
-5. Optionally: `ai-dev-effectiveness init-judge && ai-dev-effectiveness analyze . --config ai_dev.yaml --judge claude-cli`
-   to add the AI judge as a third estimator.
+```bash
+pipx install git+https://github.com/denn-gubsky/ai-dev-effectiveness
+
+# 1. Pick a workspace (NOT one of your project repos).
+mkdir -p ~/dev-effectiveness && cd ~/dev-effectiveness
+
+# 2. One-time: install the bundled judge subagent into the workspace.
+ai-dev-effectiveness init-judge
+
+# 3. Drop a config and edit the `domains` and `roles` sections to match
+#    your project. (Use this case study's ai_dev.yaml as a starting point.)
+ai-dev-effectiveness init-config && $EDITOR ai_dev.yaml
+
+# 4. Run the analysis. Reports land in ~/dev-effectiveness/<target_basename>/.
+ai-dev-effectiveness analyze /path/to/your/repo --config ai_dev.yaml \
+    --judge claude-cli
+```
+
+The analyzer is read-only with respect to your project — no `.claude/`, cache,
+or report files are ever created inside it.

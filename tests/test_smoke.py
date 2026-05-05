@@ -119,3 +119,42 @@ def test_init_judge_installs_artifacts(tmp_path):
     assert (repo / ".claude/skills/effort-estimation/SKILL.md").exists()
     assert (repo / ".claude/settings.recommended.json").exists()
     assert "agent" in actions
+
+
+def test_workspace_target_separation(git_fixture, tmp_path):
+    """Reports + cache go to workspace/<target_basename>/, NOT into the target."""
+    target = git_fixture(commits=[
+        FakeCommit(files={"src/app.py": "x = 1\n" * 30}, subject="initial"),
+        FakeCommit(files={"src/app.py": "x = 2\n" * 30}, subject="rev"),
+    ], repo_dir=tmp_path / "my-target-repo")
+
+    workspace = tmp_path / "analyzer"
+    workspace.mkdir()
+
+    cfg = Config()
+    cfg.judge = JudgeCfgPydantic(enabled=True, provider="stub", sample_size=2,
+                                 skip_below_loc=5)
+    result = analyze(repo=target, config=cfg, workspace=workspace)
+
+    expected_out = workspace / "my-target-repo"
+    assert result.workspace == workspace
+    assert result.out_dir == expected_out
+
+    # Cache lives in the per-target out dir under the workspace, not in target.
+    assert not (target / ".ai-dev-effectiveness-cache").exists()
+    assert not (target / ".claude").exists()  # we never wrote to target
+
+    # to_html and to_json honor the per-target out_dir via default_out_path().
+    result.to_html(result.default_out_path("html"))
+    result.to_json(result.default_out_path("json"))
+    assert (expected_out / "effectiveness-report.html").exists()
+    assert (expected_out / "effectiveness-report.json").exists()
+
+
+def test_target_equals_workspace_keeps_legacy_layout(git_fixture, tmp_path):
+    """When target IS the workspace, output lives in workspace itself."""
+    repo = git_fixture(commits=[
+        FakeCommit(files={"app.py": "x = 1\n"}, subject="initial"),
+    ], repo_dir=tmp_path / "single-repo")
+    result = analyze(repo=repo, workspace=repo)
+    assert result.out_dir == repo

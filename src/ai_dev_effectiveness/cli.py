@@ -18,11 +18,19 @@ def main() -> None:
 
 
 @main.command(name="analyze")
-@click.argument("repo", type=click.Path(exists=True, file_okay=False), default=".")
+@click.argument("target", type=click.Path(exists=True, file_okay=False), default=".")
 @click.option("--config", "config_path", type=click.Path(exists=True, dir_okay=False),
               default=None, help="Path to ai_dev.yaml (optional).")
-@click.option("--out", "out_path", type=click.Path(dir_okay=False), default=None,
-              help="Output file. Defaults to effectiveness-report.<format>.")
+@click.option("--out-dir", "out_dir", type=click.Path(file_okay=False),
+              default=None,
+              help="Where to write the report and cache. Defaults to "
+                   "$PWD/<target_basename>/ when target != $PWD, else $PWD. "
+                   "NOTHING is ever written inside the target.")
+@click.option("--workspace", "workspace", type=click.Path(file_okay=False),
+              default=None,
+              help="Analyzer workspace where the bundled judge agent lives. "
+                   "Defaults to $PWD. Run `init-judge` here once before "
+                   "using --judge claude-cli.")
 @click.option("--format", "fmt", type=click.Choice(["html", "json", "all"]), default="html",
               help="Output format.")
 @click.option("--judge", "judge_provider", type=click.Choice(
@@ -31,10 +39,18 @@ def main() -> None:
 @click.option("--judge-all", is_flag=True, help="Judge every commit instead of stratified sampling.")
 @click.option("--judge-dry-run", is_flag=True, help="Show what the judge would do without running it.")
 @click.option("--judge-model", default=None, help="Override the judge model name.")
-def analyze_cmd(repo: str, config_path: str | None, out_path: str | None, fmt: str,
+@click.option("--no-ast-index", is_flag=True,
+              help="Skip the `ast-index build` step before the judge runs.")
+def analyze_cmd(target: str, config_path: str | None, out_dir: str | None,
+                workspace: str | None, fmt: str,
                 judge_provider: str | None, judge_all: bool, judge_dry_run: bool,
-                judge_model: str | None) -> None:
-    """Run the analysis on REPO (defaults to current directory)."""
+                judge_model: str | None, no_ast_index: bool) -> None:
+    """Analyze the git repo at TARGET (defaults to current directory).
+
+    The analyzer is read-only with respect to TARGET — no files are created
+    or modified inside it. Reports, the judge cache, and the bundled effort-
+    judge agent all live in your local analyzer workspace ($PWD by default).
+    """
     cfg = _config.load(Path(config_path)) if config_path else _config.Config()
 
     # CLI flags override config.
@@ -47,20 +63,28 @@ def analyze_cmd(repo: str, config_path: str | None, out_path: str | None, fmt: s
         cfg.judge.model = judge_model
 
     if judge_dry_run:
-        _run_judge_dry_run(repo, cfg)
+        _run_judge_dry_run(target, cfg, workspace, out_dir)
         return
 
-    result = analyze(repo=repo, config=cfg)
+    if no_ast_index:
+        # Mark via env; ast_index.build checks this before running.
+        import os
+        os.environ["AI_DEV_EFFECTIVENESS_NO_AST_INDEX"] = "1"
+
+    result = analyze(repo=target, config=cfg, workspace=workspace, out_dir=out_dir)
+
+    click.echo(f"Workspace:      {result.workspace}")
+    click.echo(f"Output dir:     {result.out_dir}")
 
     if fmt in ("html", "all"):
-        path = Path(out_path) if (out_path and fmt == "html") else Path("effectiveness-report.html")
+        path = result.default_out_path("html")
         result.to_html(path)
-        click.echo(f"HTML written to {path}")
+        click.echo(f"HTML written:   {path}")
 
     if fmt in ("json", "all"):
-        path = Path(out_path) if (out_path and fmt == "json") else Path("effectiveness-report.json")
+        path = result.default_out_path("json")
         result.to_json(path)
-        click.echo(f"JSON written to {path}")
+        click.echo(f"JSON written:   {path}")
 
     h = result.metrics.headline
     click.echo("")
@@ -77,11 +101,23 @@ def analyze_cmd(repo: str, config_path: str | None, out_path: str | None, fmt: s
 
 
 @main.command(name="init-judge")
-@click.argument("repo", type=click.Path(exists=True, file_okay=False), default=".")
+@click.argument("workspace", type=click.Path(file_okay=False), default=".")
 @click.option("--force", is_flag=True, help="Overwrite existing files.")
-def init_judge_cmd(repo: str, force: bool) -> None:
-    """Install the bundled effort-judge subagent + skill into REPO/.claude/."""
-    repo_path = Path(repo).resolve()
+def init_judge_cmd(workspace: str, force: bool) -> None:
+    """Install the bundled effort-judge subagent into WORKSPACE/.claude/.
+
+    WORKSPACE defaults to the current directory and should be a folder
+    DEDICATED to running analyses — NOT one of your project repos. The
+    `analyze` command will look up `<workspace>/.claude/agents/effort-judge.md`
+    when --judge claude-cli is used.
+
+    Why a dedicated workspace? The bundled subagent is meant to never appear
+    inside the project repos you're analyzing — it's the analyzer's tool, not
+    a per-project config. Run this once in a folder like ~/dev-effectiveness/,
+    then run analyses from that folder against any number of target repos.
+    """
+    workspace_path = Path(workspace).resolve()
+    workspace_path.mkdir(parents=True, exist_ok=True)
 
     claude_bin = _judge.claude_on_path()
     if claude_bin:
@@ -90,26 +126,33 @@ def init_judge_cmd(repo: str, force: bool) -> None:
         click.echo("⚠️  `claude` not found on PATH. The claude-cli judge provider "
                    "won't work until you install Claude Code.", err=True)
 
-    actions = _judge.install_judge_artifacts(repo_path, force=force)
+    actions = _judge.install_judge_artifacts(workspace_path, force=force)
     click.echo("")
+    click.echo(f"Workspace: {workspace_path}")
     for kind, action in actions.items():
         click.echo(f"  [{kind}]  {action}")
 
     click.echo("")
     click.echo("Next steps:")
-    click.echo("  1. Review .claude/agents/effort-judge.md and "
-               ".claude/skills/effort-estimation/SKILL.md.")
+    click.echo(f"  1. Review {workspace_path}/.claude/agents/effort-judge.md and "
+               f"{workspace_path}/.claude/skills/effort-estimation/SKILL.md.")
     click.echo("  2. Optionally add the ast-index MCP from "
                ".claude/settings.recommended.json to your settings.json.")
-    click.echo("  3. Run: ai-dev-effectiveness analyze . --judge claude-cli")
+    click.echo("  3. From this directory, run:")
+    click.echo("       ai-dev-effectiveness analyze /path/to/some-target-repo --judge claude-cli")
+    click.echo("     Reports will be written to ./<target_basename>/.")
 
 
-def _run_judge_dry_run(repo: str, cfg) -> None:
+def _run_judge_dry_run(target: str, cfg, workspace: str | None, out_dir: str | None) -> None:
     """Print what the judge would do without actually invoking it."""
-    from . import agent_detector, domain_classifier, git_extractor
-    repo_path = Path(repo).resolve()
+    from . import _resolve_out_dir, agent_detector, ast_index, domain_classifier, git_extractor
+    repo_path = Path(target).resolve()
     while not (repo_path / ".git").exists() and repo_path != repo_path.parent:
         repo_path = repo_path.parent
+
+    workspace_path = Path(workspace).resolve() if workspace else Path.cwd().resolve()
+    out_dir_path = _resolve_out_dir(out_dir, workspace_path, repo_path)
+    agent_path = workspace_path / ".claude/agents/effort-judge.md"
 
     commits = git_extractor.extract_commits(repo_path)
     commits = agent_detector.detect_agents(commits, agent_detector.load_builtin_registry())
@@ -125,21 +168,25 @@ def _run_judge_dry_run(repo: str, cfg) -> None:
         commits, judge_cfg.sample_size, judge_cfg.skip_below_loc, judge_cfg.judge_all,
     )
 
-    click.echo(f"Judge dry-run for {repo_path}")
-    click.echo(f"  provider:        {cfg.judge.provider}")
-    click.echo(f"  model:           {cfg.judge.model}")
-    click.echo(f"  total commits:   {len(commits):,}")
-    click.echo(f"  eligible:        {(commits['insertions']+commits['deletions'] >= cfg.judge.skip_below_loc).sum():,}")
-    click.echo(f"  sampled:         {len(sampled):,}")
-    click.echo(f"  judge_all:       {cfg.judge.judge_all}")
+    click.echo(f"Judge dry-run for target:  {repo_path}")
+    click.echo(f"  workspace:           {workspace_path}")
+    click.echo(f"  out dir (reports):   {out_dir_path}")
+    click.echo(f"  cache (judgments):   {out_dir_path / '.ai-dev-effectiveness-cache'}")
+    click.echo(f"  judge agent path:    {agent_path}  ({'EXISTS' if agent_path.exists() else 'MISSING — run `init-judge`'})")
+    click.echo(f"  ast-index:           {'available' if ast_index.is_installed() else 'NOT installed (judge will run without symbol lookups)'}")
+    click.echo(f"  provider:            {cfg.judge.provider}")
+    click.echo(f"  model:               {cfg.judge.model}")
+    click.echo(f"  total commits:       {len(commits):,}")
+    click.echo(f"  eligible:            {(commits['insertions']+commits['deletions'] >= cfg.judge.skip_below_loc).sum():,}")
+    click.echo(f"  sampled:             {len(sampled):,}")
+    click.echo(f"  judge_all:           {cfg.judge.judge_all}")
     if cfg.judge.provider == "claude-cli":
-        click.echo(f"  est. wall-time:  {len(sampled) * 10:.0f}s "
+        click.echo(f"  est. wall-time:      {len(sampled) * 10:.0f}s "
                    f"({len(sampled) * 10 / 60:.1f} minutes) "
                    f"@ ~10s per claude --print invocation")
-        click.echo("  cost:            uses your Claude subscription quota; no USD charge.")
+        click.echo("  cost:                uses your Claude subscription quota; no USD charge.")
     else:
-        click.echo("  cost:            see `ai-dev-effectiveness analyze --judge {provider}` "
-                   "documentation; this provider is metered against an API key.")
+        click.echo(f"  cost:                see `--judge {cfg.judge.provider}` docs; metered against an API key.")
     click.echo("")
     click.echo("To proceed, run without --judge-dry-run.")
 
