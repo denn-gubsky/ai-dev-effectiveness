@@ -1,5 +1,7 @@
 # ai-dev-effectiveness
 
+![ai-dev-effectiveness — measure how AI co-programming accelerates software delivery](assets/hero.png)
+
 > Measure how much AI co-programming actually accelerates software delivery — on any git repo.
 
 `ai-dev-effectiveness` reads your git history, detects which commits were co-authored by AI coding agents (Claude, Copilot, Cursor, Codex, Aider, …), and produces an interactive HTML report (and a structured JSON sidecar) comparing your real delivery against a hypothetical traditional team. It triangulates three independent estimators — top-down specialist roles, bottom-up per-commit formulas, and an AI judge that reads each diff — so the productivity multipliers are credible, not just plausible.
