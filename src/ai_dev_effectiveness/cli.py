@@ -40,7 +40,7 @@ def main() -> None:
 @click.option("--judge-dry-run", is_flag=True, help="Show what the judge would do without running it.")
 @click.option("--judge-model", default=None, help="Override the judge model name.")
 @click.option("--no-ast-index", is_flag=True,
-              help="Skip the `ast-index build` step before the judge runs.")
+              help="Skip the `ast-index rebuild` step before the judge runs.")
 def analyze_cmd(target: str, config_path: str | None, out_dir: str | None,
                 workspace: str | None, fmt: str,
                 judge_provider: str | None, judge_all: bool, judge_dry_run: bool,

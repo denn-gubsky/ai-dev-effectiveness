@@ -1,6 +1,6 @@
 """Optional integration with ast-index (https://github.com/defendend/Claude-ast-index-search).
 
-When `ast-index` is on PATH, we run `ast-index build` against the target repo
+When `ast-index` is on PATH, we run `ast-index rebuild` against the target repo
 before invoking the judge. The bundled effort-judge subagent's tool allowlist
 includes `mcp__ast-index__*`, so the agent can do symbol-level lookups during
 its judgment if the user has the ast-index MCP server configured.
@@ -21,7 +21,7 @@ def is_installed() -> bool:
 
 
 def build(target: Path, timeout_sec: int = 120) -> tuple[bool, str]:
-    """Run `ast-index build` in the target repo.
+    """Run `ast-index rebuild` in the target repo.
 
     Args:
         target: path to the repo to index. ast-index walks it itself.
@@ -40,16 +40,18 @@ def build(target: Path, timeout_sec: int = 120) -> tuple[bool, str]:
 
     try:
         proc = subprocess.run(
-            ["ast-index", "build"],
+            # The subcommand is `rebuild`, not `build` — ast-index aliases it that way
+            # because indices are stateful and "build" implied a fresh-start build only.
+            ["ast-index", "rebuild"],
             cwd=str(target),
             capture_output=True, text=True,
             timeout=timeout_sec, check=False,
         )
     except subprocess.TimeoutExpired:
-        return (False, f"ast-index build timed out after {timeout_sec}s.")
+        return (False, f"ast-index rebuild timed out after {timeout_sec}s.")
     except OSError as e:
-        return (False, f"ast-index build failed to start: {e}")
+        return (False, f"ast-index rebuild failed to start: {e}")
 
     if proc.returncode == 0:
-        return (True, "ast-index build OK")
-    return (False, f"ast-index build exited {proc.returncode}: {proc.stderr.strip()[:200]}")
+        return (True, "ast-index rebuild OK")
+    return (False, f"ast-index rebuild exited {proc.returncode}: {proc.stderr.strip()[:200]}")

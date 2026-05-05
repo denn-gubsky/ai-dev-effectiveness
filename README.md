@@ -39,7 +39,7 @@ cd ~/dev-effectiveness          # the workspace where init-judge ran
 ai-dev-effectiveness analyze /path/to/your/repo --judge claude-cli
 ```
 
-The judge uses your existing Claude Code CLI session — no API key, no metered billing, no diffs leaving your machine. If you have [ast-index](https://github.com/defendend/Claude-ast-index-search) on your `PATH`, the analyzer runs `ast-index build` against the target before the judge starts so the bundled subagent can use `mcp__ast-index__*` tools for symbol-level lookups (much faster than grep-then-read for "find callers of this function").
+The judge uses your existing Claude Code CLI session — no API key, no metered billing, no diffs leaving your machine. If you have [ast-index](https://github.com/defendend/Claude-ast-index-search) on your `PATH`, the analyzer runs `ast-index rebuild` against the target before the judge starts so the bundled subagent can use `mcp__ast-index__*` tools for symbol-level lookups (much faster than grep-then-read for "find callers of this function").
 
 Other providers (opt-in): `--judge anthropic-api` (separate API key), `--judge openai`, `--judge ollama` (local model).
 
