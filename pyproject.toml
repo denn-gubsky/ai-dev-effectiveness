@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ai-dev-effectiveness"
-version = "0.1.0"
+version = "0.2.0"
 description = "Measure AI co-programming effectiveness on any git repo"
 readme = "README.md"
 license = "MIT"
