@@ -76,7 +76,70 @@ Useful flags:
 
 - `ai-dev-effectiveness init-config` — drops `ai_dev.yaml` into your workspace.
 - Define your specialist roles, effort constants, agent signatures.
-- See [`docs/REPRODUCTION_GUIDE.md`](docs/REPRODUCTION_GUIDE.md) and [`docs/config-reference.md`](docs/config-reference.md).
+
+## Configuring specialist roles
+
+The top-down half of the analysis answers "what would a traditional team need?"
+by summing your declared specialist roles. Without roles, the report skips the
+top-down chart and the three-way reconciliation falls to two-way (formula +
+judge only). Adding even three or four roles makes the comparison defensible.
+
+### Option A — let Claude propose the roles
+
+```bash
+cd ~/dev-effectiveness
+ai-dev-effectiveness suggest-roles /path/to/your/repo
+```
+
+Surveys the target codebase via a bundled Claude Code subagent
+(`roles-architect`), identifies natural domain clusters, and prints a YAML
+snippet ready to paste under your `ai_dev.yaml` `roles:` key. Uses your
+existing Claude subscription (no API key, no diffs leaving your machine).
+Takes 60-180 seconds. Edit the result freely — the agent provides a starting
+point grounded in your actual file layout, not the final word.
+
+### Option B — write the roles yourself
+
+Each role describes the slice of the codebase one specialist would own and
+how many person-months a senior engineer (working without AI assistance)
+would need to deliver it. Schema:
+
+```yaml
+roles:
+  - { role: "Senior Backend Engineer", scope: "API, business logic, persistence",
+      loc: 25000, pm_low: 6, pm_high: 8, color: "#DC2626" }
+  - { role: "Frontend Engineer",       scope: "React UI, design system",
+      loc: 18000, pm_low: 4, pm_high: 6, color: "#2563EB" }
+  - { role: "DevOps",                  scope: "CI/CD, infra, deploys",
+      loc:  4000, pm_low: 2, pm_high: 3, color: "#D97706" }
+```
+
+How to estimate `pm_low` / `pm_high`:
+
+| Domain                                    | Productive LOC/day |
+|-------------------------------------------|--------------------|
+| C / C++ / Rust / CUDA / kernel            | 15-25              |
+| TypeScript / Python / Go / Java           | 30-50              |
+| Glue / config / IaC                       | 20-30              |
+| ML training / distributed systems         | 15-25 (incl. ramp) |
+
+`pm = loc / (rate_per_day * 22 days_per_month)`. Use the lower rate for
+`pm_high`, the higher rate for `pm_low`. The notebook averages the range to
+produce the headline multiplier — wider spread = more uncertainty.
+
+### A worked example
+
+[`examples/robotics-case-study/ai_dev.yaml`](examples/robotics-case-study/ai_dev.yaml)
+is the actual config used to produce the case-study report — six roles
+covering a multi-domain ROS2 / CUDA / ML / depth-vision project. Use it as a
+template if your project has similar shape; otherwise let `suggest-roles`
+generate one tailored to your codebase.
+
+## Documentation
+
+- [`docs/REPRODUCTION_GUIDE.md`](docs/REPRODUCTION_GUIDE.md) — full step-by-step
+  walkthrough (legacy from the original notebook, covers manual notebook usage).
+- [`docs/config-reference.md`](docs/config-reference.md) — every YAML field documented.
 
 ## License
 
