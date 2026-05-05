@@ -38,9 +38,9 @@ Three independent productivity multipliers triangulating the same question:
 
 1. **Top-down** — what would a traditional specialist team need? Person-months by role.
 2. **Bottom-up** — per-commit effort using language-weighted formulas (base hours + per-LOC rate).
-3. **AI judge** — Claude reads each diff and emits a calibrated estimate via the bundled subagent.
+3. **AI judge** — an LLM reads each diff and emits a calibrated estimate. Pluggable across four providers: Claude Code CLI (default, uses your subscription), the Anthropic API, OpenAI gpt-4o, or a local Ollama model.
 
-When all three agree within 2×, the multiplier is defensible. When they diverge, the report flags it.
+When all three agree within 2×, the multiplier is defensible. When they diverge, the report flags it. Switching judge providers (claude-cli vs openai vs ollama) on the same target gives you a fourth corroboration: if independent models agree on the multiplier, it's not a model artifact.
 
 ## End-to-end flow
 
@@ -264,7 +264,7 @@ How to estimate `pm_low` / `pm_high`:
 ```jsonc
 {
   "tool": "ai-dev-effectiveness",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "generated_at": "2026-05-05T...",
   "project": { "name": "...", "team_size": 1, "team_description": "...", ... },
   "actual_team": {

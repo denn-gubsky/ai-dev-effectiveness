@@ -184,9 +184,19 @@ paths inside the workspace at runtime, so any value you put here is ignored.
 once in your workspace. `provider: stub` is the deterministic test provider
 (no network, no claude subprocess).
 
-`anthropic-api`, `openai`, and `ollama` providers are stubbed — they accept
-the config but raise `NotImplementedError` at runtime today. They'll ship in
-a follow-up release.
+`provider: anthropic-api` uses the Anthropic API (requires `ANTHROPIC_API_KEY`,
+defaults to `claude-sonnet-4-5`). `provider: openai` uses OpenAI's structured-
+outputs feature (requires `OPENAI_API_KEY`, requires gpt-4o or newer, defaults
+to `gpt-4o-2024-11-20`). `provider: ollama` uses a local ollama server
+(defaults to `llama3.1:70b`, override `OLLAMA_HOST` env var to point at a
+non-localhost server). All four real providers (claude-cli + 3 API) share the
+same JSON schema for output, so judgment results are comparable across them.
+
+API providers receive the diff embedded in the user prompt rather than fetching
+it themselves — they have less agentic context than `claude-cli` (which can
+follow callers via ast-index, read related files, etc.). For most commits the
+difference is negligible; for cross-cutting refactors `claude-cli` produces
+meaningfully better estimates.
 
 ## CLI overrides
 
