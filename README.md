@@ -32,7 +32,7 @@ ai-dev-effectiveness init-judge          # installs the bundled subagent into .c
 ai-dev-effectiveness analyze . --judge claude-cli
 ```
 
-The judge uses your existing Claude Code CLI session — no API key, no metered billing, no diffs leaving your machine. If you have [ast-index](https://github.com/asgardiandevs/ast-index) MCP configured, it's used for symbol-level lookups.
+The judge uses your existing Claude Code CLI session — no API key, no metered billing, no diffs leaving your machine. If you have [ast-index](https://github.com/defendend/Claude-ast-index-search) MCP configured, it's used for symbol-level lookups.
 
 Other providers: `--judge anthropic-api` (separate API key), `--judge openai`, `--judge ollama` (local model).
 

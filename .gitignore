@@ -30,6 +30,7 @@ env/
 # Tool caches and outputs (user-local)
 .ai-dev-effectiveness-cache/
 ai_dev.yaml
+!examples/**/ai_dev.yaml
 effectiveness-report.html
 effectiveness-report.json
 effectiveness-report.pdf
