@@ -112,8 +112,15 @@ class ClaudeCliJudge:
         return self.cfg.model
 
     def judge(self, sha: str, repo: Path) -> JudgeResult:
-        # agent_path may be absolute (analyzer-workspace mode, recommended) or
-        # relative-to-target (legacy single-repo mode). Resolve accordingly.
+        # `claude --agent <name>` resolves agents from <cwd>/.claude/agents/, NOT
+        # from arbitrary paths. Since claude runs from the target dir but our
+        # bundled subagent lives in the analyzer workspace, agent-by-name
+        # discovery would fail (or load a target-side agent we don't control).
+        #
+        # Workaround: read the agent .md ourselves, extract the body and the
+        # tools/model frontmatter, and pass them via --append-system-prompt
+        # and --allowedTools. Combined with --json-schema, this gives us the
+        # exact subagent behavior with no dependence on agent discovery.
         agent_path = Path(self.cfg.agent_path)
         agent_full_path = agent_path if agent_path.is_absolute() else (repo / agent_path)
         if not agent_full_path.exists():
@@ -123,20 +130,51 @@ class ClaudeCliJudge:
                 f"workspace (the directory you run analyses from)."
             )
 
+        agent_body, agent_fm = _read_agent_definition(agent_full_path)
+
+        skill_path = Path(self.cfg.skill_path)
+        skill_full_path = skill_path if skill_path.is_absolute() else (repo / skill_path)
+        skill_body = ""
+        if skill_full_path.exists():
+            skill_body, _ = _read_agent_definition(skill_full_path)
+
+        system_prompt = agent_body
+        if skill_body:
+            system_prompt += "\n\n## Skill: effort-estimation rubric\n\n" + skill_body
+
+        # Tool allowlist. The agent frontmatter declares it; if absent, fall
+        # back to the same set the bundled agent ships with.
+        tools = agent_fm.get("tools") or _DEFAULT_JUDGE_TOOLS
+        if isinstance(tools, list):
+            tools_str = ",".join(t.strip() for t in tools)
+        else:
+            tools_str = str(tools)
+
+        model = agent_fm.get("model") or self.cfg.model
+
         prompt = (
-            f"Estimate effort for commit {sha}. "
-            f"Output STRICT JSON per the schema in your agent definition."
+            f"Estimate engineering effort for commit {sha} in this git "
+            f"repository. Read the diff with `git show`, investigate as needed, "
+            f"and emit one JSON object matching the required schema. "
+            f"Output ONLY the JSON object, no markdown fences, no commentary."
         )
 
+        # `--output-format json` is required when using `--json-schema`: the
+        # schema-validated payload comes back at `.structured_output` inside
+        # the result wrapper. With `--output-format text`, schema-mode is silent
+        # and stdout is empty.
         cmd = [
             self._claude_path, "--print",
-            "--output-format", "text",
-            "--agent", str(agent_full_path),
+            "--output-format", "json",
+            "--model", str(model),
+            "--append-system-prompt", system_prompt,
+            "--allowedTools", tools_str,
+            "--json-schema", _JUDGMENT_JSON_SCHEMA,
             prompt,
         ]
-        # Subprocess CWD = target repo. The agent's tools (Read, Grep, git show)
-        # operate on target content; only the agent definition itself is loaded
-        # from the analyzer workspace.
+        # Subprocess CWD = target repo so Read/Grep/`git show` operate on
+        # target content. Nothing is written; agent body & schema come from
+        # the analyzer workspace via flags above.
         start = time.monotonic()
         proc = subprocess.run(
             cmd, cwd=str(repo), capture_output=True, text=True,
@@ -154,6 +192,46 @@ class ClaudeCliJudge:
         result.elapsed_sec = elapsed
         result.raw_response = proc.stdout
         return result
+
+
+_DEFAULT_JUDGE_TOOLS = (
+    "Read,Grep,Glob,Bash(git show:*),Bash(git diff:*),Bash(git log:*),mcp__ast-index__*"
+)
+
+_JUDGMENT_JSON_SCHEMA = (
+    '{"type":"object",'
+    '"properties":{'
+    '"human_hours":{"type":"number","minimum":0},'
+    '"ai_assisted_hours":{"type":"number","minimum":0},'
+    '"complexity":{"enum":["trivial","small","medium","large","architectural"]},'
+    '"confidence":{"enum":["low","medium","high"]},'
+    '"rationale":{"type":"string","maxLength":300}'
+    '},'
+    '"required":["human_hours","ai_assisted_hours","complexity","confidence","rationale"],'
+    '"additionalProperties":false}'
+)
+
+
+def _read_agent_definition(path: Path) -> tuple[str, dict]:
+    """Read a Claude Code agent or skill .md file.
+
+    Returns (body, frontmatter_dict). When the file has no YAML frontmatter,
+    body is the entire content and frontmatter is empty.
+    """
+    content = path.read_text()
+    if not content.startswith("---\n"):
+        return content.strip(), {}
+    end = content.find("\n---\n", 4)
+    if end == -1:
+        return content.strip(), {}
+    frontmatter_raw = content[4:end]
+    body = content[end + 5:]
+    try:
+        import yaml
+        fm = yaml.safe_load(frontmatter_raw) or {}
+    except Exception:
+        fm = {}
+    return body.strip(), fm
 
 
 class StubJudge:
@@ -230,28 +308,33 @@ def make_provider(cfg: JudgeConfig) -> JudgeProvider:
 # response parsing
 # ---------------------------------------------------------------------------
 
-_JSON_BLOCK_RE = re.compile(r"\{[^{}]*?(\{[^{}]*?\}[^{}]*?)*\}", re.DOTALL)
+_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE)
 
 
 def _parse_judge_json(text: str, sha: str, max_retries: int = 0) -> JudgeResult:
-    """Pull the first valid JSON object out of `text` and validate fields.
+    """Pull a valid JSON judgment out of `text` and validate fields.
 
-    Tries (in order):
-      1. parse the whole text as JSON
-      2. find the first {...} block and parse that
-      3. raise (after `max_retries` exhausted by the caller)
+    Strategies tried in order:
+      1. Parse the whole stripped text as JSON; if it has a `.structured_output`
+         field (the `--output-format json --json-schema` wrapper from
+         `claude --print`), use that field as the judgment.
+      2. Parse the whole stripped text as JSON directly (fallback for older
+         claude versions or non-schema invocations).
+      3. Pull a JSON object out of a ```json ... ``` markdown fence.
+      4. Brace-count walk: find the first `{` and read until matching `}`.
     """
-    candidates: list[str] = [text.strip()]
-    for m in _JSON_BLOCK_RE.finditer(text):
-        candidates.append(m.group(0))
-
-    for candidate in candidates:
+    for candidate in _candidate_json_blocks(text):
         try:
             d = json.loads(candidate)
         except json.JSONDecodeError:
             continue
         if not isinstance(d, dict):
             continue
+
+        # Unwrap the claude --output-format json envelope if present.
+        if "structured_output" in d and isinstance(d["structured_output"], dict):
+            d = d["structured_output"]
+
         try:
             return JudgeResult(
                 sha=sha,
@@ -259,15 +342,51 @@ def _parse_judge_json(text: str, sha: str, max_retries: int = 0) -> JudgeResult:
                 ai_assisted_hours=float(d["ai_assisted_hours"]),
                 complexity=d["complexity"],
                 confidence=d.get("confidence", "medium"),
-                rationale=d.get("rationale", "")[:300],
+                rationale=str(d.get("rationale", ""))[:300],
             )
         except (KeyError, ValueError, TypeError):
             continue
 
     raise ValueError(
         f"Could not extract a valid JSON judgment for {sha[:8]} from "
-        f"{len(text)} chars of output."
+        f"{len(text)} chars of output. First 200 chars: {text[:200]!r}"
     )
+
+
+def _candidate_json_blocks(text: str):
+    """Yield candidate JSON strings from a possibly-noisy LLM response."""
+    stripped = text.strip()
+    if stripped:
+        yield stripped
+    for m in _FENCE_RE.finditer(text):
+        yield m.group(1)
+    # Brace-count walk handles any other interleaving (prose before the JSON,
+    # the JSON itself unfenced, then optional trailing prose).
+    depth = 0
+    start = -1
+    in_string = False
+    escape = False
+    for i, ch in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start != -1:
+                yield text[start:i + 1]
+                start = -1
 
 
 # ---------------------------------------------------------------------------
@@ -310,10 +429,21 @@ class JudgeCache:
         p.write_text(json.dumps(payload, indent=2))
 
 
+# Bump this when the judge invocation logic changes in a way that should
+# invalidate cached judgments. (Cache also auto-invalidates when the bundled
+# SKILL.md or agent.md content changes.)
+_JUDGE_LOGIC_VERSION = "v3-output-format-json-structured-output"
+
+
 def _prompt_version() -> str:
-    """Hash of the bundled SKILL.md + agent.md → invalidates cache when either changes."""
+    """Stable hash of judge-logic + bundled SKILL.md + agent.md.
+
+    Bumping `_JUDGE_LOGIC_VERSION` or modifying either bundled file
+    automatically invalidates all cached judgments under the old key.
+    """
     from importlib import resources
     h = hashlib.sha256()
+    h.update(_JUDGE_LOGIC_VERSION.encode())
     for relpath in (
         "claude/skills/effort-estimation/SKILL.md",
         "claude/agents/effort-judge.md",
