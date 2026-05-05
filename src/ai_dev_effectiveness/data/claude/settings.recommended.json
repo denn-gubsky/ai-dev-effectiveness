@@ -1,0 +1,20 @@
+{
+  "_comment": "Recommended .claude/settings.json snippet for ai-dev-effectiveness judge mode. Merge this into your repo's .claude/settings.json. The ast-index MCP gives the effort-judge subagent symbol-level lookups (find callers, find definitions) that are much faster than grep-then-read.",
+  "mcpServers": {
+    "ast-index": {
+      "command": "ast-index",
+      "args": ["mcp"]
+    }
+  },
+  "permissions": {
+    "allow": [
+      "Read(./**)",
+      "Grep(./**)",
+      "Glob(./**)",
+      "Bash(git show:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "mcp__ast-index__*"
+    ]
+  }
+}

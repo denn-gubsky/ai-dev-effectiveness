@@ -1,0 +1,166 @@
+# Built-in registry of AI coding-agent signatures.
+#
+# Ordered list — first match wins per commit (but a single commit can match
+# multiple entries; all matches end up in the `agents` column).
+#
+# Schema per entry:
+#   name          : display name shown in charts / reports
+#   pattern       : regex (case-insensitive, MULTILINE). Use literal strings
+#                   wherever possible — regex specials must be escaped.
+#   kind          : where to look: commit_trailer | commit_message | author_email | author_name
+#   category      : ai_agent | ai_assistant | ai_ide | ai_tool | other
+#   model_family  : free-form taxonomy (claude_opus, claude_sonnet, gpt, mixed, …)
+#   vendor        : anthropic | openai | github | cursor | aider | sourcegraph | …
+#   color         : hex color used in the report
+#
+# Users add their own entries via config:  agents.extend: [{...}]
+#
+# === LEARNING NOTE FOR DENNIS ===
+# The four Claude entries below are seeded from the actual signatures observed
+# in the HockeyBot repo's Co-Authored-By trailers. The remaining entries have
+# `pattern: "TODO: …"` placeholders — you have the domain knowledge of what the
+# real-world trailers look like for each tool. Fill them in during your review.
+# Test each by running:  ai-dev-effectiveness analyze <some-repo-using-that-tool>
+# ================================
+
+agents:
+
+  # --- Claude (Anthropic) -------------------------------------------------
+  # Verbatim regexes for the four signatures observed in the HockeyBot repo:
+  #   "Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
+  #   "Claude Opus 4.6 <noreply@anthropic.com>"
+  #   "Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+  #   "Claude Sonnet 4.6 <noreply@anthropic.com>"
+  # Order matters: more-specific patterns first (Opus/Sonnet/Haiku before generic Claude).
+
+  - name: "Claude Opus"
+    pattern: "Co-Authored-By:\\s*Claude\\s+Opus\\b"
+    kind: commit_trailer
+    category: ai_agent
+    model_family: claude_opus
+    vendor: anthropic
+    color: "#A855F7"
+
+  - name: "Claude Sonnet"
+    pattern: "Co-Authored-By:\\s*Claude\\s+Sonnet\\b"
+    kind: commit_trailer
+    category: ai_agent
+    model_family: claude_sonnet
+    vendor: anthropic
+    color: "#7C3AED"
+
+  - name: "Claude Haiku"
+    pattern: "Co-Authored-By:\\s*Claude\\s+Haiku\\b"
+    kind: commit_trailer
+    category: ai_agent
+    model_family: claude_haiku
+    vendor: anthropic
+    color: "#6D28D9"
+
+  - name: "Claude (other)"
+    # Catch-all for any other Claude variant — runs last among Claude entries.
+    pattern: "Co-Authored-By:\\s*Claude\\b"
+    kind: commit_trailer
+    category: ai_agent
+    model_family: claude_unknown
+    vendor: anthropic
+    color: "#5B21B6"
+
+  # --- OpenAI -------------------------------------------------------------
+  # TODO(dennis): observed Codex CLI / ChatGPT trailer formats.
+  #
+  # Codex CLI commits typically include a Co-Authored-By trailer; verify the
+  # exact form (does it say "Codex", "OpenAI Codex", or include a model name
+  # like "gpt-5-codex"?). Same for ChatGPT-generated commits.
+
+  - name: "Codex CLI"
+    pattern: "Co-Authored-By:\\s*Codex\\b"   # TODO: verify against real Codex trailers
+    kind: commit_trailer
+    category: ai_agent
+    model_family: gpt
+    vendor: openai
+    color: "#10A37F"
+
+  - name: "ChatGPT"
+    pattern: "(Generated|Co-Authored)-By:\\s*ChatGPT\\b"   # TODO: verify
+    kind: commit_trailer
+    category: ai_assistant
+    model_family: gpt
+    vendor: openai
+    color: "#0E8C6F"
+
+  # --- IDE-integrated assistants -----------------------------------------
+  # TODO(dennis): the next 9 patterns are starting points. For each, find a
+  # public commit using that tool and copy the exact trailer/marker.
+
+  - name: "Cursor"
+    pattern: "Co-Authored-By:.*[Cc]ursor"
+    kind: commit_trailer
+    category: ai_ide
+    model_family: mixed
+    vendor: cursor
+    color: "#06B6D4"
+
+  - name: "GitHub Copilot"
+    pattern: "Co-Authored-By:.*[Cc]opilot"
+    kind: commit_trailer
+    category: ai_assistant
+    model_family: gpt
+    vendor: github
+    color: "#0EA5E9"
+
+  - name: "Aider"
+    pattern: "(?m)^aider:"   # TODO: aider tends to put 'aider:' in subject line, verify
+    kind: commit_message
+    category: ai_agent
+    model_family: mixed
+    vendor: aider
+    color: "#F59E0B"
+
+  - name: "Sourcegraph Cody"
+    pattern: "Co-Authored-By:.*Cody\\b"
+    kind: commit_trailer
+    category: ai_assistant
+    model_family: mixed
+    vendor: sourcegraph
+    color: "#FF5543"
+
+  - name: "Continue"
+    pattern: "Co-Authored-By:.*[Cc]ontinue\\b"
+    kind: commit_trailer
+    category: ai_ide
+    model_family: mixed
+    vendor: continue
+    color: "#EAB308"
+
+  - name: "Windsurf"
+    pattern: "Co-Authored-By:.*[Ww]indsurf"
+    kind: commit_trailer
+    category: ai_ide
+    model_family: mixed
+    vendor: codeium
+    color: "#3B82F6"
+
+  - name: "Codeium"
+    pattern: "Co-Authored-By:.*[Cc]odeium"
+    kind: commit_trailer
+    category: ai_assistant
+    model_family: mixed
+    vendor: codeium
+    color: "#1D4ED8"
+
+  - name: "Tabnine"
+    pattern: "Co-Authored-By:.*[Tt]abnine"
+    kind: commit_trailer
+    category: ai_assistant
+    model_family: mixed
+    vendor: tabnine
+    color: "#8B5CF6"
+
+  - name: "Devin"
+    pattern: "Co-Authored-By:.*[Dd]evin"
+    kind: commit_trailer
+    category: ai_agent
+    model_family: mixed
+    vendor: cognition
+    color: "#EC4899"

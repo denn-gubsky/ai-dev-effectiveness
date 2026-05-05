@@ -1,0 +1,83 @@
+# ai-dev-effectiveness config — copy this into your repo as `ai_dev.yaml`
+# and customize. Every field is optional; omitted fields fall back to defaults.
+
+project:
+  name: "My Project"
+  team_size: 1                   # how many human engineers worked on this
+  human_daily_rate_usd: 800
+  ai_monthly_cost_usd: 200
+  package_root: null             # set to "src" if you use src-layout
+
+# Domains group commits by which subsystem they touch.
+# Pattern is a regex matched against each changed file's path.
+domains:
+  frontend: { pattern: "^src/frontend/",         color: "#2563EB" }
+  backend:  { pattern: "^src/api/",              color: "#DC2626" }
+  shared:   { pattern: "^src/shared/",           color: "#059669" }
+  tests:    { pattern: "^(tests|__tests__)/",    color: "#7C3AED" }
+  infra:    { pattern: "^(terraform|k8s|deploy)/", color: "#D97706" }
+
+# Optional explicit list of packages to scan for LOC. If empty, the tool uses
+# the keys of `domains` as package names and looks them up under package_root.
+packages: []
+
+# Override built-in language groups if your stack differs from the defaults.
+# Omit this section entirely to use defaults.
+# languages:
+#   compiled:
+#     extensions: [".rs", ".go", ".cpp", ".h"]
+#     base_hours: 2.0
+#     hours_per_loc: 0.03
+#   dynamic:
+#     extensions: [".py", ".ts", ".tsx", ".js"]
+#     base_hours: 1.0
+#     hours_per_loc: 0.015
+#   config:
+#     extensions: [".yaml", ".yml", ".json", ".toml"]
+#     base_hours: 0.5
+#     hours_per_loc: 0.005
+
+# Specialist roles for the top-down comparison. Skip this section to disable
+# the top-down chart and rely only on bottom-up + judge.
+roles:
+  - { role: "Senior Backend Engineer", scope: "API + business logic",
+      loc: 25000, pm_low: 6, pm_high: 8, color: "#DC2626" }
+  - { role: "Frontend Engineer", scope: "React UI + design system",
+      loc: 18000, pm_low: 4, pm_high: 6, color: "#2563EB" }
+  - { role: "DevOps", scope: "CI/CD, deployment, infrastructure",
+      loc: 4000, pm_low: 2, pm_high: 3, color: "#D97706" }
+
+# Override the bottom-up estimator constants. All optional.
+effort:
+  integration_multiplier: 1.3
+  test_debug_multiplier: 1.5
+  max_hours_per_commit: 40
+
+# Extend the built-in agent registry. Each entry has the same schema as
+# `data/agents.yaml`. See `docs/agent-registry.md` for examples.
+agents:
+  extend: []
+
+# Annotate the cumulative-LOC chart with milestones from commit subjects.
+milestones:
+  "initial commit": "Project Start"
+  "v1.0": "v1.0 Release"
+
+output:
+  formats: ["html"]              # html | json | pdf
+  out_dir: "."
+  hide_code: true
+
+# Optional AI judge for diff-based effort estimation.
+judge:
+  enabled: false
+  provider: claude-cli           # claude-cli (uses your subscription) | anthropic-api | openai | ollama | stub
+  model: sonnet
+  sample_size: 5                 # commits per (domain × size_bucket) stratum
+  judge_all: false
+  skip_below_loc: 5
+  timeout_sec: 60
+  max_retries: 2
+  cache_dir: ".ai-dev-effectiveness-cache"
+  agent_path: ".claude/agents/effort-judge.md"
+  skill_path: ".claude/skills/effort-estimation/SKILL.md"
