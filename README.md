@@ -21,7 +21,8 @@ ai-dev-effectiveness init-judge
 ai-dev-effectiveness suggest-roles ~/work/your-repo --apply
 
 # Every run: just go. Config auto-loads, JSON sidecar emits by default.
-ai-dev-effectiveness analyze ~/work/your-repo --judge claude-cli
+ai-dev-effectiveness analyze ~/work/your-repo --judge claude-cli \
+    --team "1 developer + Claude Code (Opus 4.7)"
 open ./your-repo/effectiveness-report.html
 ```
 
@@ -79,7 +80,27 @@ What happens:
 
 The JSON contains everything needed for downstream report generation (Claude Cowork, custom dashboards, etc.) — three estimators side-by-side, cost comparison, per-agent / per-author / per-domain / per-package breakdowns, and an audit sample of judge rationales.
 
-### 4. When trailers are missing
+### 4. Describe the actual team (optional but recommended)
+
+The report compares your **suggested team** (the specialist roles, sized in person-months) against your **actual team** (the humans + AI that actually shipped the code). Without a label, the report's "Team Composition" chart auto-derives one from author count + detected agents (e.g. `"1 developer + Claude Opus"`). To set it explicitly:
+
+```bash
+ai-dev-effectiveness analyze ~/work/your-repo \
+    --team "1 developer + Claude Code (Opus 4.7)" \
+    --team-size 1
+```
+
+Or persist in `ai_dev.yaml`:
+
+```yaml
+project:
+  team_size: 1
+  team_description: "1 developer + Claude Code (Opus 4.7)"
+```
+
+`--team-size` controls the math (actual person-months = `team_size × project_months`); `--team` is purely the chart label. Precedence: CLI > YAML > auto-derive.
+
+### 5. When trailers are missing
 
 Real-world git histories often under-report AI assistance — GitHub squash-merges strip Co-Authored-By trailers, and some workflows commit without invoking the AI tool's commit flow. If you know your project was AI-paired but trailer detection looks too low:
 
@@ -136,6 +157,8 @@ Useful `analyze` flags:
 | `--judge-dry-run` | Show what the judge would do (sample size, paths) without running it. |
 | `--judge-all` | Judge every commit instead of stratified sampling. |
 | `--assume-untagged "Claude Opus"` | Attribute untagged non-merge commits to a named agent. |
+| `--team "1 dev + Claude Code"` | Label for the actual team in the comparison chart. |
+| `--team-size N` | Number of human developers (default 1). Affects actual-PM math. |
 | `--workspace PATH` | Override the workspace (default `$PWD`). |
 | `--out-dir PATH` | Override report destination (cache stays at the default location). |
 | `--format html\|json\|both` | Output formats. Default `both` writes HTML + JSON. |
@@ -151,7 +174,7 @@ The default AI judge uses your Claude Code CLI subscription (no API key, no mete
 - `--judge ollama` — local model via Ollama (privacy-preserving)
 - `--judge stub` — deterministic, used in CI tests
 
-The `anthropic-api`, `openai`, and `ollama` providers are stubbed at v0.2 and will ship in a follow-up release.
+The `anthropic-api`, `openai`, and `ollama` providers are stubbed in v1.0 and will ship in a follow-up minor release.
 
 ## Case study
 
@@ -199,9 +222,15 @@ How to estimate `pm_low` / `pm_high`:
 ```jsonc
 {
   "tool": "ai-dev-effectiveness",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "generated_at": "2026-05-05T...",
-  "project": { "name": "...", "team_size": 1, ... },
+  "project": { "name": "...", "team_size": 1, "team_description": "...", ... },
+  "actual_team": {
+    "description": "1 developer + Claude Code (Opus 4.7)",
+    "team_size": 1,
+    "n_authors": 2,
+    "person_months": 0.1
+  },
   "headline": { "n_commits": 68, "n_ai_assisted": 56, "loc_total": 22277, ... },
   "estimators": {
     "top_down":  { "roles": [...], "total_pm_mid": 23, "multiplier": 230 },
