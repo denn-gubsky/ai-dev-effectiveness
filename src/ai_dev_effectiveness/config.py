@@ -71,6 +71,11 @@ class AgentExtension(BaseModel):
 class AgentsConfig(BaseModel):
     extend: list[AgentExtension] = Field(default_factory=list)
     override: list[AgentExtension] | None = None  # if set, replaces the built-in registry
+    # When the user knows the project was AI-assisted but commits don't carry
+    # the trailer (squash-merges, pre-trailer-convention work, manual-commit
+    # workflows), set this to a registry agent name (e.g. "Claude Opus") to
+    # attribute every untagged non-merge commit to that agent.
+    assume_untagged: str | None = None
 
 
 class JudgeConfig(BaseModel):

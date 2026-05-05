@@ -142,6 +142,66 @@ def vendor_color_map(registry: list[AgentSignature]) -> dict[str, str]:
     return out
 
 
+def attribute_untagged(
+    commits: pd.DataFrame,
+    agent_name: str,
+    registry: list[AgentSignature],
+) -> pd.DataFrame:
+    """Re-attribute commits with no detected agent to a known agent.
+
+    Use this when you KNOW the project was AI-assisted but commits don't
+    carry the trailer (squash-merges strip them; some workflows commit via
+    `git commit -m` without invoking the AI tool's commit flow; etc.).
+
+    The named agent must already exist in `registry`. Lookup is by exact
+    `name` match; if no match, raises ValueError with the available names.
+
+    Merge commits are NOT re-attributed by default — they almost never
+    represent direct authorship and would inflate the AI commit count.
+    """
+    if commits.empty or "primary_agent" not in commits.columns:
+        return commits
+
+    sig = next((s for s in registry if s.name == agent_name), None)
+    if sig is None:
+        names = sorted({s.name for s in registry})
+        raise ValueError(
+            f"Unknown agent {agent_name!r} in --assume-untagged. "
+            f"Pick one of: {', '.join(names)}"
+        )
+
+    out = commits.copy()
+    untagged_mask = out["primary_agent"].isna()
+    if "is_merge" in out.columns:
+        untagged_mask &= ~out["is_merge"]
+
+    if not untagged_mask.any():
+        return out
+
+    # Append the assumed agent to existing agent lists (rather than overwriting)
+    # so a future merge-inheritance pass can still distinguish detected vs
+    # inherited attributions. For untagged rows, agents starts empty.
+    new_agents_col = out["agents"].copy()
+    new_vendors_col = out["agent_vendors"].copy() if "agent_vendors" in out.columns else None
+
+    for idx in out.index[untagged_mask]:
+        existing = list(new_agents_col.loc[idx] or [])
+        if sig.name not in existing:
+            existing.append(sig.name)
+        new_agents_col.loc[idx] = existing
+        if new_vendors_col is not None:
+            existing_v = list(new_vendors_col.loc[idx] or [])
+            if sig.vendor not in existing_v:
+                existing_v.append(sig.vendor)
+            new_vendors_col.loc[idx] = sorted(existing_v)
+
+    out["agents"] = new_agents_col
+    if new_vendors_col is not None:
+        out["agent_vendors"] = new_vendors_col
+    out.loc[untagged_mask, "primary_agent"] = sig.name
+    return out
+
+
 def write_user_settings_template(target: Path) -> None:
     """Stub for future use; not called yet."""
     target.write_text("# User-defined agent signatures go here.\nagents:\n  extend: []\n")

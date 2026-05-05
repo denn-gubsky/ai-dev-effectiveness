@@ -158,3 +158,39 @@ def test_target_equals_workspace_keeps_legacy_layout(git_fixture, tmp_path):
     ], repo_dir=tmp_path / "single-repo")
     result = analyze(repo=repo, workspace=repo)
     assert result.out_dir == repo
+
+
+def test_assume_untagged_attributes_to_named_agent(git_fixture):
+    """`assume_untagged` re-attributes non-merge commits without a trailer."""
+    repo = git_fixture(commits=[
+        FakeCommit(files={"a.py": "1\n"}, subject="manual work"),  # no trailer
+        FakeCommit(files={"a.py": "2\n"}, subject="claude-paired",
+                   extra_trailers={"Co-Authored-By": "Claude Opus 4.7 <noreply@anthropic.com>"}),
+        FakeCommit(files={"a.py": "3\n"}, subject="another manual"),  # no trailer
+    ])
+
+    # Without the flag: 1/3 detected as AI-assisted.
+    baseline = analyze(repo=repo)
+    assert baseline.metrics.headline["n_ai_assisted"] == 1
+
+    # With assume_untagged="Claude Opus": all 3 attributed to Claude Opus.
+    cfg = Config()
+    cfg.agents.assume_untagged = "Claude Opus"
+    result = analyze(repo=repo, config=cfg)
+    assert result.metrics.headline["n_ai_assisted"] == 3
+    by_agent = result.metrics.by_agent.set_index("agent")["commits"].to_dict()
+    assert by_agent.get("Claude Opus", 0) == 3
+
+
+def test_assume_untagged_unknown_agent_raises(git_fixture):
+    """An unknown agent name raises with the list of valid names."""
+    repo = git_fixture(commits=[FakeCommit(files={"a.py": "1\n"}, subject="x")])
+    cfg = Config()
+    cfg.agents.assume_untagged = "ImaginaryBot"
+    try:
+        analyze(repo=repo, config=cfg)
+    except ValueError as e:
+        assert "ImaginaryBot" in str(e)
+        assert "Claude Opus" in str(e)  # listed as a valid option
+    else:
+        raise AssertionError("expected ValueError")

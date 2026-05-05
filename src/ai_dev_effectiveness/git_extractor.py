@@ -16,7 +16,8 @@ import pandas as pd
 # Sentinel that's effectively impossible to appear in a real commit body.
 _DELIM = "<<<COMMIT::AIDE>>>"
 _BODY_END = "<<<BODY_END::AIDE>>>"
-_LOG_FORMAT = f"{_DELIM}%n%H%n%ai%n%an%n%ae%n%s%n%b%n{_BODY_END}"
+# %P = parent SHAs (space-separated, multiple parents → merge commit).
+_LOG_FORMAT = f"{_DELIM}%n%H%n%P%n%ai%n%an%n%ae%n%s%n%b%n{_BODY_END}"
 
 # Trailer regex: matches "Token: value" lines at the end of a commit body
 # (RFC 5322-ish). git's own trailer parser is more permissive but this
@@ -93,23 +94,24 @@ def extract_commits(repo_dir: Path, branch: str | None = None) -> pd.DataFrame:
             continue
 
         sha = lines[0].strip()
-        date_str = lines[1].strip()
-        author_name = lines[2].strip()
-        author_email = lines[3].strip()
-        subject = lines[4].strip()
+        parents = [p for p in lines[1].strip().split() if p]
+        date_str = lines[2].strip()
+        author_name = lines[3].strip()
+        author_email = lines[4].strip()
+        subject = lines[5].strip()
 
         # Find the body terminator and the numstat tail.
         body_end_idx = None
-        for i, line in enumerate(lines[5:], start=5):
+        for i, line in enumerate(lines[6:], start=6):
             if line.strip() == _BODY_END:
                 body_end_idx = i
                 break
 
         if body_end_idx is None:
-            body = "\n".join(lines[5:]).strip()
+            body = "\n".join(lines[6:]).strip()
             numstat_lines: list[str] = []
         else:
-            body = "\n".join(lines[5:body_end_idx]).strip()
+            body = "\n".join(lines[6:body_end_idx]).strip()
             numstat_lines = lines[body_end_idx + 1:]
 
         insertions = 0
@@ -130,6 +132,8 @@ def extract_commits(repo_dir: Path, branch: str | None = None) -> pd.DataFrame:
 
         rows.append({
             "sha": sha,
+            "parents": parents,
+            "is_merge": len(parents) > 1,
             "date": pd.to_datetime(date_str, utc=True).tz_localize(None),
             "author_name": author_name,
             "author_email": author_email,

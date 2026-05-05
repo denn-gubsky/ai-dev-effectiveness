@@ -128,6 +128,11 @@ def analyze(
         )
     commits = agent_detector.detect_agents(commits, registry)
 
+    if cfg.agents.assume_untagged:
+        commits = agent_detector.attribute_untagged(
+            commits, cfg.agents.assume_untagged, registry,
+        )
+
     # 3. classify domains
     patterns = cfg.domain_patterns()
     if not patterns:

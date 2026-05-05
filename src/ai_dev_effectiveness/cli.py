@@ -41,10 +41,18 @@ def main() -> None:
 @click.option("--judge-model", default=None, help="Override the judge model name.")
 @click.option("--no-ast-index", is_flag=True,
               help="Skip the `ast-index rebuild` step before the judge runs.")
+@click.option("--assume-untagged", "assume_untagged", default=None,
+              metavar="AGENT_NAME",
+              help="Attribute every untagged non-merge commit to AGENT_NAME "
+                   "(e.g. 'Claude Opus'). Use when you know the work was AI-"
+                   "assisted but the trailer is missing (squash-merges strip "
+                   "trailers; pre-trailer-convention commits look manual). "
+                   "Run `list-agents` to see valid names.")
 def analyze_cmd(target: str, config_path: str | None, out_dir: str | None,
                 workspace: str | None, fmt: str,
                 judge_provider: str | None, judge_all: bool, judge_dry_run: bool,
-                judge_model: str | None, no_ast_index: bool) -> None:
+                judge_model: str | None, no_ast_index: bool,
+                assume_untagged: str | None) -> None:
     """Analyze the git repo at TARGET (defaults to current directory).
 
     The analyzer is read-only with respect to TARGET — no files are created
@@ -61,6 +69,8 @@ def analyze_cmd(target: str, config_path: str | None, out_dir: str | None,
         cfg.judge.judge_all = True
     if judge_model is not None:
         cfg.judge.model = judge_model
+    if assume_untagged is not None:
+        cfg.agents.assume_untagged = assume_untagged
 
     if judge_dry_run:
         _run_judge_dry_run(target, cfg, workspace, out_dir)
