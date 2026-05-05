@@ -60,21 +60,106 @@ class AnalysisResult:
         return html
 
     def to_json(self, path: str | Path | None = None) -> str:
-        """Dump headline metrics, by_agent, by_domain, weekly aggregates, judge_summary."""
+        """Dump a comprehensive AI-readable analysis payload.
+
+        The JSON is structured for downstream Claude Cowork report generation:
+        every section needed to write a credible productivity narrative is
+        present — headline, three estimators (top-down / bottom-up / judge),
+        cost comparison, per-agent and per-author breakdowns, LOC by package,
+        and a sample of judge rationales for audit.
+        """
+        from .effort_estimator import top_down_person_months, total_person_months
+
+        roles_list = self.config.roles_list()
+        roles_df = top_down_person_months(roles_list) if roles_list else None
+        pm_low, pm_high, pm_mid = total_person_months(roles_df) if roles_df is not None else (0.0, 0.0, 0.0)
+
+        project_months = self.metrics.headline.get("project_months") or 0.0
+        team_size = self.config.project.team_size
+        actual_pm = project_months * team_size
+
+        bottom_up_total = (
+            float(self.metrics.weekly["traditional_hours"].sum())
+            if not self.metrics.weekly.empty and "traditional_hours" in self.metrics.weekly.columns
+            else 0.0
+        )
+        actual_hours = (
+            float(self.metrics.weekly["actual_hours"].sum())
+            if not self.metrics.weekly.empty and "actual_hours" in self.metrics.weekly.columns
+            else 0.0
+        ) * team_size
+
+        # Cost comparison.
+        from .defaults import DEFAULT_EFFORT
+        rate = self.config.project.human_daily_rate_usd or DEFAULT_EFFORT.senior_engineer_daily_rate_usd
+        sub = self.config.project.ai_monthly_cost_usd or DEFAULT_EFFORT.ai_subscription_monthly_usd
+        trad_cost = pm_mid * 22 * rate
+        actual_cost = actual_pm * 22 * rate + actual_pm * sub
+
         payload: dict[str, Any] = {
             "version": __version__,
+            "tool": "ai-dev-effectiveness",
+            "generated_at": pd.Timestamp.utcnow().isoformat(),
             "project": self.config.project.model_dump(),
+            "workspace": str(self.workspace),
+            "out_dir": str(self.out_dir),
             "headline": _serialize(self.metrics.headline),
+            "estimators": {
+                "top_down": {
+                    "configured": bool(roles_list),
+                    "roles": _df_to_records(roles_df) if roles_df is not None else [],
+                    "total_pm_low": pm_low,
+                    "total_pm_mid": pm_mid,
+                    "total_pm_high": pm_high,
+                    "actual_pm": actual_pm,
+                    "multiplier": (pm_mid / actual_pm) if actual_pm else None,
+                },
+                "bottom_up": {
+                    "configured": bottom_up_total > 0,
+                    "total_traditional_hours": bottom_up_total,
+                    "actual_hours": actual_hours,
+                    "multiplier": (bottom_up_total / actual_hours) if actual_hours else None,
+                },
+                "judge": (
+                    self.metrics.judge_summary
+                    if self.metrics.judge_summary
+                    else {"configured": False}
+                ),
+            },
+            "cost_comparison": {
+                "traditional_cost_usd": trad_cost,
+                "actual_cost_usd": actual_cost,
+                "savings_multiplier": (trad_cost / actual_cost) if actual_cost else None,
+                "human_daily_rate_usd": rate,
+                "ai_monthly_cost_usd": sub,
+            },
             "by_agent": _df_to_records(self.metrics.by_agent),
             "by_author": _df_to_records(self.metrics.by_author),
             "by_domain": _df_to_records(self.metrics.by_domain),
+            "by_package": _df_to_records(self.loc) if self.loc is not None else [],
+            "by_complexity": _df_to_records(self.metrics.by_complexity)
+                if self.metrics.by_complexity is not None else [],
+            "author_agent_matrix": _df_to_records(self.metrics.author_agent_matrix),
             "weekly": _df_to_records(self.metrics.weekly),
-            "judge_summary": self.metrics.judge_summary,
+            "judge_samples": self._judge_samples(limit=15),
         }
         out = json.dumps(payload, indent=2, default=str)
         if path is not None:
             Path(path).write_text(out)
         return out
+
+    def _judge_samples(self, limit: int = 15) -> list[dict[str, Any]]:
+        """First N judged commits with rationale for audit/spot-checking."""
+        if "judge_complexity" not in self.commits.columns:
+            return []
+        judged = self.commits[self.commits["judge_complexity"].notna()]
+        if judged.empty:
+            return []
+        cols = ["sha", "subject", "author_name", "insertions", "deletions",
+                "primary_domain", "judge_complexity", "judge_confidence",
+                "judge_human_hours", "judge_ai_hours", "judge_rationale"]
+        present = [c for c in cols if c in judged.columns]
+        return judged.head(limit)[present].to_dict(orient="records")
 
 
 def analyze(
