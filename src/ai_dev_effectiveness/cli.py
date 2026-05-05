@@ -162,6 +162,7 @@ def _run_judge_dry_run(target: str, cfg, workspace: str | None, out_dir: str | N
 
     workspace_path = Path(workspace).resolve() if workspace else Path.cwd().resolve()
     out_dir_path = _resolve_out_dir(out_dir, workspace_path, repo_path)
+    cache_root = _resolve_out_dir(None, workspace_path, repo_path)  # cache is location-stable
     agent_path = workspace_path / ".claude/agents/effort-judge.md"
 
     commits = git_extractor.extract_commits(repo_path)
@@ -181,7 +182,7 @@ def _run_judge_dry_run(target: str, cfg, workspace: str | None, out_dir: str | N
     click.echo(f"Judge dry-run for target:  {repo_path}")
     click.echo(f"  workspace:           {workspace_path}")
     click.echo(f"  out dir (reports):   {out_dir_path}")
-    click.echo(f"  cache (judgments):   {out_dir_path / '.ai-dev-effectiveness-cache'}")
+    click.echo(f"  cache (judgments):   {cache_root / '.ai-dev-effectiveness-cache'}")
     click.echo(f"  judge agent path:    {agent_path}  ({'EXISTS' if agent_path.exists() else 'MISSING — run `init-judge`'})")
     click.echo(f"  ast-index:           {'available' if ast_index.is_installed() else 'NOT installed (judge will run without symbol lookups)'}")
     click.echo(f"  provider:            {cfg.judge.provider}")

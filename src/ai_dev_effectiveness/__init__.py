@@ -99,6 +99,13 @@ def analyze(
     workspace_path = Path(workspace).resolve() if workspace else Path.cwd().resolve()
     out_dir_path = _resolve_out_dir(out_dir, workspace_path, repo_path)
     out_dir_path.mkdir(parents=True, exist_ok=True)
+    # Cache lives at the DEFAULT per-target location regardless of any
+    # --out-dir override the user passed in. That way running the same
+    # analysis twice with different --out-dir values still hits the same
+    # judgment cache (which is keyed on commit SHA + provider + prompt
+    # version, not on output destination).
+    cache_root = _resolve_out_dir(None, workspace_path, repo_path)
+    cache_root.mkdir(parents=True, exist_ok=True)
 
     if isinstance(config, Config):
         cfg = config
@@ -106,9 +113,9 @@ def analyze(
         cfg = _config.load(config) if config is not None else Config()
 
     # Reroute judge artefacts to the analyzer workspace and the per-target
-    # output dir, regardless of what the YAML config said. This guarantees
+    # cache dir, regardless of what the YAML config said. This guarantees
     # nothing lands inside the target repo.
-    cfg.judge.cache_dir = str(out_dir_path / ".ai-dev-effectiveness-cache")
+    cfg.judge.cache_dir = str(cache_root / ".ai-dev-effectiveness-cache")
     cfg.judge.agent_path = str(workspace_path / ".claude/agents/effort-judge.md")
     cfg.judge.skill_path = str(workspace_path / ".claude/skills/effort-estimation/SKILL.md")
 
@@ -175,8 +182,9 @@ def analyze(
             ignore_paths=tuple(cfg.judge.ignore_paths),
         )
 
-        def _progress(i, n, sha):
-            print(f"  judging {i}/{n}: {sha[:8]}", flush=True)
+        def _progress(i, n, sha, cached=False):
+            verb = "cached " if cached else "judging"
+            print(f"  {verb} {i}/{n}: {sha[:8]}", flush=True)
 
         commits = _judge.judge_commits(commits, repo_path, judge_cfg,
                                        progress_callback=_progress)

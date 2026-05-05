@@ -538,11 +538,10 @@ def judge_commits(
     cache = JudgeCache(cfg.cache_dir, provider.name(), provider.model_id(), _prompt_version())
 
     for i, sha in enumerate(sampled["sha"].tolist(), start=1):
-        if progress_callback:
-            progress_callback(i, len(sampled), sha)
-
         result = cache.get(sha)
         if result is None:
+            if progress_callback:
+                progress_callback(i, len(sampled), sha, cached=False)
             try:
                 result = provider.judge(sha, repo)
             except Exception as e:
@@ -553,6 +552,8 @@ def judge_commits(
                     rationale=f"Judge failed: {type(e).__name__}: {str(e)[:120]}",
                 )
             cache.put(result)
+        elif progress_callback:
+            progress_callback(i, len(sampled), sha, cached=True)
 
         idx = out.index[out["sha"] == sha]
         out.loc[idx, "judge_human_hours"] = result.human_hours

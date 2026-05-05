@@ -182,6 +182,43 @@ def test_assume_untagged_attributes_to_named_agent(git_fixture):
     assert by_agent.get("Claude Opus", 0) == 3
 
 
+def test_judge_cache_is_location_stable_across_out_dir(git_fixture, tmp_path):
+    """Cache reuses across runs even when --out-dir changes.
+
+    The cache is keyed on (sha, provider, model, prompt_version) and lives
+    at the DEFAULT per-target location regardless of where the report goes.
+    """
+    target = git_fixture(commits=[
+        FakeCommit(files={"app.py": "x = 1\n" * 30}, subject="initial"),
+        FakeCommit(files={"app.py": "x = 2\n" * 30}, subject="rev"),
+        FakeCommit(files={"app.py": "x = 3\n" * 30}, subject="rev2"),
+    ], repo_dir=tmp_path / "thing")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    cfg = Config()
+    cfg.judge = JudgeCfgPydantic(enabled=True, provider="stub", sample_size=2,
+                                 skip_below_loc=5)
+
+    # First run — populates the default cache at <ws>/<thing>/.cache.
+    r1 = analyze(repo=target, config=cfg, workspace=workspace)
+    expected_cache = workspace / "thing" / ".ai-dev-effectiveness-cache"
+    assert expected_cache.exists()
+    n_first = len(list(expected_cache.rglob("*.json")))
+    assert n_first > 0
+
+    # Second run — different out_dir — must hit the SAME cache.
+    other_out = tmp_path / "elsewhere"
+    r2 = analyze(repo=target, config=cfg, workspace=workspace, out_dir=other_out)
+    assert r2.out_dir == other_out
+    # Default cache dir still populated; no new cache at the override location.
+    assert not (other_out / ".ai-dev-effectiveness-cache").exists()
+    assert len(list(expected_cache.rglob("*.json"))) == n_first
+
+    # And both runs produced the same judgment numbers (cache hit, not re-run).
+    assert r1.metrics.judge_summary["total_human_hours"] == r2.metrics.judge_summary["total_human_hours"]
+
+
 def test_assume_untagged_unknown_agent_raises(git_fixture):
     """An unknown agent name raises with the list of valid names."""
     repo = git_fixture(commits=[FakeCommit(files={"a.py": "1\n"}, subject="x")])
