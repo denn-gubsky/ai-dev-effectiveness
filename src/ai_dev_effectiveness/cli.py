@@ -52,11 +52,20 @@ def main() -> None:
                    "assisted but the trailer is missing (squash-merges strip "
                    "trailers; pre-trailer-convention commits look manual). "
                    "Run `list-agents` to see valid names.")
+@click.option("--team", "team_description", default=None, metavar="LABEL",
+              help='Label for the actual team that built the project '
+                   '(e.g. "1 developer + Claude Code (Opus 4.7)"). Appears as '
+                   "the bar label in the team-composition comparison chart. "
+                   "If omitted, auto-derived from author count + detected AI agents.")
+@click.option("--team-size", "team_size", default=None, type=int, metavar="N",
+              help="Number of human developers on the project. Affects the "
+                   "actual person-months baseline. Default 1.")
 def analyze_cmd(target: str, config_path: str | None, out_dir: str | None,
                 workspace: str | None, fmt: str,
                 judge_provider: str | None, judge_all: bool, judge_dry_run: bool,
                 judge_model: str | None, no_ast_index: bool,
-                assume_untagged: str | None) -> None:
+                assume_untagged: str | None,
+                team_description: str | None, team_size: int | None) -> None:
     """Analyze the git repo at TARGET (defaults to current directory).
 
     The analyzer is read-only with respect to TARGET — no files are created
@@ -85,6 +94,10 @@ def analyze_cmd(target: str, config_path: str | None, out_dir: str | None,
         cfg.judge.model = judge_model
     if assume_untagged is not None:
         cfg.agents.assume_untagged = assume_untagged
+    if team_description is not None:
+        cfg.project.team_description = team_description
+    if team_size is not None:
+        cfg.project.team_size = team_size
 
     if judge_dry_run:
         _run_judge_dry_run(target, cfg, workspace, out_dir)

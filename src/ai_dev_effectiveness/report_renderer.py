@@ -30,6 +30,7 @@ class Figures:
     insertions_by_domain: go.Figure | None = None
     by_agent_bar: go.Figure | None = None
     agent_evolution: go.Figure | None = None
+    team_composition: go.Figure | None = None  # roles vs actual team
     pm_comparison: go.Figure | None = None
     cost_comparison: go.Figure | None = None
     three_way_reconciliation: go.Figure | None = None  # only when judge ran
@@ -43,6 +44,8 @@ def build_figures(
     roles_df: pd.DataFrame | None,
     registry,
     project_name: str = "Project",
+    team_description: str | None = None,
+    actual_pm: float = 0.0,
 ) -> Figures:
     figs = Figures()
     figs.headline_table = _headline_table(metrics.headline, project_name)
@@ -58,8 +61,12 @@ def build_figures(
     if not metrics.by_domain.empty and "primary_domain" in commits.columns:
         figs.insertions_by_domain = _insertions_by_domain(commits)
     if roles_df is not None and not roles_df.empty:
-        figs.pm_comparison = _pm_comparison(roles_df, metrics.headline.get("project_months") or 0)
-        figs.cost_comparison = _cost_comparison(roles_df, metrics.headline.get("project_months") or 0)
+        project_months = metrics.headline.get("project_months") or 0
+        figs.team_composition = _team_composition(
+            roles_df, actual_pm or project_months, team_description or "Actual team",
+        )
+        figs.pm_comparison = _pm_comparison(roles_df, project_months)
+        figs.cost_comparison = _cost_comparison(roles_df, project_months)
     if metrics.judge_summary:
         figs.three_way_reconciliation = _three_way(metrics, roles_df)
     return figs
@@ -206,6 +213,72 @@ def _agent_evolution(commits: pd.DataFrame, registry) -> go.Figure:
     return fig
 
 
+def _team_composition(
+    roles_df: pd.DataFrame, actual_pm: float, actual_team_label: str,
+) -> go.Figure:
+    """Side-by-side stacked bars comparing the suggested vs actual team.
+
+    Left column: traditional team — one stacked segment per specialist role,
+    sized by mid-point person-months, colored from the role config.
+    Right column: actual team — single block sized by `actual_pm`, labeled
+    with `actual_team_label`.
+    """
+    fig = go.Figure()
+
+    # Stacked segments for the suggested team — one trace per role so each
+    # gets its own legend entry and color.
+    for _, r in roles_df.iterrows():
+        fig.add_trace(go.Bar(
+            x=["Traditional team (suggested)"],
+            y=[r["pm_mid"]],
+            name=f"{r['role']} ({r.get('scope', '')[:40]})",
+            marker_color=r.get("color") or "#888888",
+            text=f"{r['pm_mid']:.1f} PM",
+            textposition="inside",
+            insidetextanchor="middle",
+            hovertemplate=(
+                f"<b>{r['role']}</b><br>"
+                f"Scope: {r.get('scope', '')}<br>"
+                f"PM range: {r.get('pm_low', 0):.0f} – {r.get('pm_high', 0):.0f} "
+                f"(mid {r['pm_mid']:.1f})<br>LOC: {r.get('loc', 0):,}<extra></extra>"
+            ),
+        ))
+
+    # The actual team is a single block; legend entry uses the user-supplied
+    # description so the contrast is unambiguous.
+    fig.add_trace(go.Bar(
+        x=["Actual team"],
+        y=[actual_pm],
+        name=actual_team_label,
+        marker_color=DEFAULT_COLORS["secondary"],
+        text=f"{actual_pm:.2f} PM",
+        textposition="outside",
+        hovertemplate=f"<b>{actual_team_label}</b><br>{actual_pm:.2f} person-months<extra></extra>",
+    ))
+
+    total_trad_pm = float(roles_df["pm_mid"].sum())
+    multiplier_str = (
+        f"{total_trad_pm / actual_pm:.1f}×" if actual_pm > 0 else "—"
+    )
+
+    fig.update_layout(
+        title=(
+            f"Team composition — {len(roles_df)} specialist roles "
+            f"({total_trad_pm:.0f} PM) vs {actual_team_label} "
+            f"({actual_pm:.2f} PM, {multiplier_str} multiplier)"
+        ),
+        yaxis_title="Person-months",
+        barmode="stack",
+        height=520,
+        legend=dict(
+            orientation="v", yanchor="top", y=1.0, xanchor="left", x=1.02,
+            font=dict(size=10),
+        ),
+        margin=dict(r=320),  # leave room for the legend
+    )
+    return fig
+
+
 def _pm_comparison(roles_df: pd.DataFrame, project_months: float) -> go.Figure:
     pm_mid = float(roles_df["pm_mid"].sum())
     pm_low = float(roles_df["pm_low"].sum())
@@ -323,13 +396,17 @@ some, run <code>ai-dev-effectiveness list-agents</code> to see what the built-in
 registry covers, or extend it via <code>ai_dev.yaml</code>.</div>{% endif %}
 {% if figs.agent_evolution %}<div class="chart">{{ figs.agent_evolution }}</div>{% endif %}
 
+{% if figs.team_composition %}<h2>Team Composition</h2>
+<div class="chart">{{ figs.team_composition }}</div>{% endif %}
+
 {% if figs.pm_comparison %}<h2>Productivity Multipliers</h2>
 <div class="chart">{{ figs.pm_comparison }}</div>
 <div class="chart">{{ figs.cost_comparison }}</div>
 {% else %}<h2>Productivity Multipliers</h2>
 <div class="callout">No specialist roles configured — top-down comparison
-skipped. Run <code>ai-dev-effectiveness init-config</code> and define the team
-that would traditionally build this project to enable the comparison.</div>
+skipped. Run <code>ai-dev-effectiveness suggest-roles &lt;target&gt; --apply</code>
+to have Claude propose the team composition for you, or define
+<code>roles:</code> manually in your <code>ai_dev.yaml</code>.</div>
 {% endif %}
 
 {% if figs.three_way_reconciliation %}<h2>Estimator Reconciliation</h2>

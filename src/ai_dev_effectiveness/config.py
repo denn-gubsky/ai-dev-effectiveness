@@ -29,6 +29,11 @@ class ProjectConfig(BaseModel):
     human_daily_rate_usd: float = DEFAULT_EFFORT.senior_engineer_daily_rate_usd
     ai_monthly_cost_usd: float = DEFAULT_EFFORT.ai_subscription_monthly_usd
     package_root: str | None = None  # e.g. "src" for src-layout repos
+    # Free-form label describing the actual team that built the project,
+    # e.g. "1 developer + Claude Code (Opus 4.7)". Used as the bar label in
+    # the team-composition comparison chart. If omitted, auto-derived from
+    # the author count and detected AI agents.
+    team_description: str | None = None
 
 
 class DomainPattern(BaseModel):

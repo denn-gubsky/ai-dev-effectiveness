@@ -104,6 +104,12 @@ class AnalysisResult:
             "workspace": str(self.workspace),
             "out_dir": str(self.out_dir),
             "headline": _serialize(self.metrics.headline),
+            "actual_team": {
+                "description": self.config.project.team_description,
+                "team_size": self.config.project.team_size,
+                "n_authors": self.metrics.headline.get("n_authors", 0),
+                "person_months": actual_pm,
+            },
             "estimators": {
                 "top_down": {
                     "configured": bool(roles_list),
@@ -282,10 +288,20 @@ def analyze(
     bundle = _metrics.build_metrics_bundle(commits, loc_total, project_months,
                                            judge_summary_dict=judge_summary_dict)
 
+    # 8b. resolve the actual-team description: user-supplied wins, else
+    # auto-derive from author count + detected agents.
+    if not cfg.project.team_description:
+        cfg.project.team_description = _metrics.derive_team_description(
+            commits, team_size=cfg.project.team_size,
+        )
+
     # 9. figures
+    actual_pm = (project_months or 0) * (cfg.project.team_size or 1)
     figures = report_renderer.build_figures(
         commits, bundle, loc_df, roles_df if not roles_df.empty else None,
         registry, project_name=cfg.project.name,
+        team_description=cfg.project.team_description,
+        actual_pm=actual_pm,
     )
 
     return AnalysisResult(

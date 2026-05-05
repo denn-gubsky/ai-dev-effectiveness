@@ -47,6 +47,42 @@ def headline(commits: pd.DataFrame, loc_total: int, project_months: float | None
     }
 
 
+def derive_team_description(commits: pd.DataFrame, team_size: int | None = None) -> str:
+    """Generate a default team-description label from observed git data.
+
+    Used when the user doesn't supply `project.team_description`. Combines
+    author count with the top 1–2 detected AI agents, producing labels like:
+
+        "1 developer + Claude Opus"
+        "2 developers + Claude Opus, GitHub Copilot"
+        "1 developer (no AI detected)"
+    """
+    if commits.empty:
+        return "1 developer"
+    n_humans = team_size or commits["author_name"].nunique() or 1
+    suffix = "developer" if n_humans == 1 else "developers"
+
+    if "agents" in commits.columns:
+        from collections import Counter
+        counter: Counter[str] = Counter()
+        for agents_list in commits["agents"]:
+            for a in (agents_list or []):
+                if not a:
+                    continue
+                # Skip the catch-all "Claude (other)" entry — it's noise that
+                # always pairs with the more-specific match.
+                if a == "Claude (other)":
+                    continue
+                counter[a] += 1
+        top_agents = [name for name, _ in counter.most_common(2)]
+    else:
+        top_agents = []
+
+    if top_agents:
+        return f"{n_humans} {suffix} + {', '.join(top_agents)}"
+    return f"{n_humans} {suffix} (no AI detected)"
+
+
 def by_agent(commits: pd.DataFrame) -> pd.DataFrame:
     """Per-agent totals.
 
