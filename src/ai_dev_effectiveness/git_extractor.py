@@ -155,17 +155,26 @@ def extract_commits(repo_dir: Path, branch: str | None = None) -> pd.DataFrame:
     return df
 
 
-def add_week_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Add ISO year_week and week_start (Monday) columns. Idempotent."""
+def add_time_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Add ISO week (`year_week`, `week_start`) and day (`year_day`, `day_start`)
+    grouping columns. Idempotent.
+
+    Both granularities are always populated so the metrics layer can pick the
+    one that fits the project span without re-walking the DataFrame.
+    """
     if df.empty:
         return df
-    if "year_week" in df.columns and "week_start" in df.columns:
-        return df
-
-    iso = df["date"].dt.isocalendar()
     df = df.copy()
-    df["year_week"] = iso["year"].astype(str) + "-W" + iso["week"].astype(str).str.zfill(2)
-    # week_start = Monday of the ISO week
-    df["week_start"] = df["date"] - pd.to_timedelta(df["date"].dt.weekday, unit="D")
-    df["week_start"] = df["week_start"].dt.normalize()
+    if "year_week" not in df.columns or "week_start" not in df.columns:
+        iso = df["date"].dt.isocalendar()
+        df["year_week"] = iso["year"].astype(str) + "-W" + iso["week"].astype(str).str.zfill(2)
+        df["week_start"] = df["date"] - pd.to_timedelta(df["date"].dt.weekday, unit="D")
+        df["week_start"] = df["week_start"].dt.normalize()
+    if "year_day" not in df.columns or "day_start" not in df.columns:
+        df["day_start"] = df["date"].dt.normalize()
+        df["year_day"] = df["day_start"].dt.strftime("%Y-%m-%d")
     return df
+
+
+# Backwards-compatible alias — older callers expect `add_week_columns`.
+add_week_columns = add_time_columns

@@ -16,7 +16,8 @@ import pandas as pd
 class MetricsBundle:
     """Everything the report renderer needs, in one place."""
     headline: dict[str, Any]
-    weekly: pd.DataFrame
+    weekly: pd.DataFrame                     # time-bucketed series (see `granularity`)
+    granularity: str                         # "daily" or "weekly"
     by_agent: pd.DataFrame
     by_author: pd.DataFrame
     by_domain: pd.DataFrame
@@ -137,9 +138,24 @@ def by_domain(commits: pd.DataFrame) -> pd.DataFrame:
     return agg.sort_values("commits", ascending=False)
 
 
-def weekly_aggregates(commits: pd.DataFrame) -> pd.DataFrame:
-    """Group commits by ISO week. Adds traditional_hours sum if column present."""
-    if commits.empty or "year_week" not in commits.columns:
+def time_aggregates(commits: pd.DataFrame, granularity: str = "weekly") -> pd.DataFrame:
+    """Group commits by ISO week or by day. Adds traditional_hours sum if present.
+
+    The output keeps a `week_start` column regardless of granularity — for daily
+    granularity it holds the day's date. Downstream code reads `granularity`
+    from the `MetricsBundle` to label charts correctly.
+    """
+    if commits.empty:
+        return pd.DataFrame()
+
+    if granularity == "daily":
+        key_col, start_col = "year_day", "day_start"
+        hours_per_period = 8.0  # one working day
+    else:
+        key_col, start_col = "year_week", "week_start"
+        hours_per_period = 40.0  # one working week
+
+    if key_col not in commits.columns:
         return pd.DataFrame()
 
     agg_kwargs = {
@@ -148,20 +164,24 @@ def weekly_aggregates(commits: pd.DataFrame) -> pd.DataFrame:
         "deletions": ("deletions", "sum"),
         "net_loc": ("net_loc", "sum"),
         "files_changed_total": ("n_files", "sum"),
-        "week_start": ("week_start", "first"),
+        "week_start": (start_col, "first"),
     }
     if "traditional_hours_est" in commits.columns:
         agg_kwargs["traditional_hours"] = ("traditional_hours_est", "sum")
     if "primary_agent" in commits.columns:
-        # Count of AI-assisted commits per week.
         commits = commits.copy()
         commits["_ai_assisted"] = commits["primary_agent"].notna().astype(int)
         agg_kwargs["ai_assisted_commits"] = ("_ai_assisted", "sum")
 
-    weekly = commits.groupby("year_week").agg(**agg_kwargs).reset_index().sort_values("week_start")
-    weekly["cumulative_loc"] = weekly["net_loc"].cumsum()
-    weekly["actual_hours"] = 40.0
-    return weekly
+    out = commits.groupby(key_col).agg(**agg_kwargs).reset_index().sort_values("week_start")
+    out["cumulative_loc"] = out["net_loc"].cumsum()
+    out["actual_hours"] = hours_per_period
+    return out
+
+
+# Backwards-compatible alias for callers/tests pinned to the old name.
+def weekly_aggregates(commits: pd.DataFrame) -> pd.DataFrame:
+    return time_aggregates(commits, granularity="weekly")
 
 
 def cumulative_loc(commits: pd.DataFrame) -> pd.DataFrame:
@@ -199,16 +219,30 @@ def detect_first_ai_commit(commits: pd.DataFrame) -> pd.Timestamp | None:
     return masked["date"].min()
 
 
+def choose_granularity(project_months: float | None, threshold_months: float = 2.0) -> str:
+    """Pick chart granularity from total project span.
+
+    Short projects (< `threshold_months`) get a daily time series — a weekly
+    view collapses to 4–8 points and hides intra-week activity bursts.
+    """
+    if project_months is None:
+        return "weekly"
+    return "daily" if project_months < threshold_months else "weekly"
+
+
 def build_metrics_bundle(
     commits: pd.DataFrame,
     loc_total: int,
     project_months: float | None,
     judge_summary_dict: dict[str, Any] | None = None,
+    granularity: str | None = None,
 ) -> MetricsBundle:
     """Top-level entry point — builds every aggregate the renderer needs."""
+    gran = granularity or choose_granularity(project_months)
     return MetricsBundle(
         headline=headline(commits, loc_total, project_months),
-        weekly=weekly_aggregates(commits),
+        weekly=time_aggregates(commits, granularity=gran),
+        granularity=gran,
         by_agent=by_agent(commits),
         by_author=by_author(commits),
         by_domain=by_domain(commits),

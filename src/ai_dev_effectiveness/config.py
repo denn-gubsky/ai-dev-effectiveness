@@ -9,7 +9,7 @@ from importlib import resources
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .defaults import (
     DEFAULT_DOMAIN_PALETTE,
@@ -102,6 +102,20 @@ class OutputConfig(BaseModel):
     formats: list[str] = Field(default_factory=lambda: ["html"])
     out_dir: str = "."
     hide_code: bool = True
+    # Time bucket for the commits-frequency and code-changes charts.
+    # "auto" (default) uses daily granularity for projects under 2 months
+    # and weekly otherwise. Set to "daily" or "weekly" to force.
+    chart_granularity: str = "auto"
+
+    @field_validator("chart_granularity")
+    @classmethod
+    def _valid_granularity(cls, v: str) -> str:
+        v = v.lower()
+        if v not in ("auto", "daily", "weekly"):
+            raise ValueError(
+                f"chart_granularity must be 'auto', 'daily', or 'weekly' (got {v!r})"
+            )
+        return v
 
 
 class Config(BaseModel):

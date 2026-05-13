@@ -48,18 +48,19 @@ def build_figures(
     actual_pm: float = 0.0,
 ) -> Figures:
     figs = Figures()
+    granularity = getattr(metrics, "granularity", "weekly")
     figs.headline_table = _headline_table(metrics.headline, project_name)
     if not loc_df.empty:
         figs.loc_by_package = _loc_by_package(loc_df)
     if not metrics.weekly.empty:
-        figs.commits_per_week = _commits_per_week(metrics.weekly)
-        figs.weekly_loc_changes = _weekly_loc_changes(metrics.weekly)
+        figs.commits_per_week = _commits_per_period(metrics.weekly, granularity)
+        figs.weekly_loc_changes = _period_loc_changes(metrics.weekly, granularity)
         figs.cumulative_loc = _cumulative_loc(metrics.weekly)
     if not metrics.by_agent.empty:
         figs.by_agent_bar = _by_agent_bar(metrics.by_agent, registry)
         figs.agent_evolution = _agent_evolution(commits, registry)
     if not metrics.by_domain.empty and "primary_domain" in commits.columns:
-        figs.insertions_by_domain = _insertions_by_domain(commits)
+        figs.insertions_by_domain = _insertions_by_domain(commits, granularity)
     if roles_df is not None and not roles_df.empty:
         project_months = metrics.headline.get("project_months") or 0
         figs.team_composition = _team_composition(
@@ -121,18 +122,31 @@ def _loc_by_package(loc_df: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def _commits_per_week(weekly: pd.DataFrame) -> go.Figure:
+def _period_labels(granularity: str) -> tuple[str, str, str]:
+    """Return (per-period adjective, short noun, title-cased adjective) for chart labels."""
+    if granularity == "daily":
+        return ("per Day", "day", "Daily")
+    return ("per Week", "week", "Weekly")
+
+
+def _commits_per_period(weekly: pd.DataFrame, granularity: str = "weekly") -> go.Figure:
+    per_period, noun, _ = _period_labels(granularity)
     fig = go.Figure(go.Scatter(
         x=weekly["week_start"], y=weekly["commits"], mode="lines+markers",
         line=dict(color=DEFAULT_COLORS["primary"], width=2), marker=dict(size=4),
-        name="Commits/week",
+        name=f"Commits/{noun}",
     ))
-    fig.update_layout(title="Commits per Week", xaxis_title="Date",
+    fig.update_layout(title=f"Commits {per_period}", xaxis_title="Date",
                       yaxis_title="Commits", height=380)
     return fig
 
 
-def _weekly_loc_changes(weekly: pd.DataFrame) -> go.Figure:
+# Back-compat shim for any external caller pinned to the old name.
+_commits_per_week = _commits_per_period
+
+
+def _period_loc_changes(weekly: pd.DataFrame, granularity: str = "weekly") -> go.Figure:
+    _, _, adjective = _period_labels(granularity)
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=weekly["week_start"], y=weekly["insertions"], name="Insertions",
@@ -142,9 +156,12 @@ def _weekly_loc_changes(weekly: pd.DataFrame) -> go.Figure:
         x=weekly["week_start"], y=-weekly["deletions"], name="Deletions",
         fill="tozeroy", line=dict(color=DEFAULT_COLORS["danger"]),
     ))
-    fig.update_layout(title="Weekly Code Changes", xaxis_title="Date",
+    fig.update_layout(title=f"{adjective} Code Changes", xaxis_title="Date",
                       yaxis_title="LOC (insertions − deletions)", height=380)
     return fig
+
+
+_weekly_loc_changes = _period_loc_changes
 
 
 def _cumulative_loc(weekly: pd.DataFrame) -> go.Figure:
@@ -158,20 +175,24 @@ def _cumulative_loc(weekly: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def _insertions_by_domain(commits: pd.DataFrame) -> go.Figure:
-    if "year_week" not in commits.columns:
+def _insertions_by_domain(commits: pd.DataFrame, granularity: str = "weekly") -> go.Figure:
+    if granularity == "daily":
+        key_col, start_col, adjective = "year_day", "day_start", "Daily"
+    else:
+        key_col, start_col, adjective = "year_week", "week_start", "Weekly"
+    if key_col not in commits.columns:
         return go.Figure()
     pivot = (commits.assign(_=commits["insertions"])
-             .groupby(["year_week", "primary_domain"])["_"].sum().unstack(fill_value=0))
-    week_starts = commits.groupby("year_week")["week_start"].first().reindex(pivot.index)
+             .groupby([key_col, "primary_domain"])["_"].sum().unstack(fill_value=0))
+    period_starts = commits.groupby(key_col)[start_col].first().reindex(pivot.index)
 
     fig = go.Figure()
     for domain in pivot.columns:
         fig.add_trace(go.Scatter(
-            x=week_starts, y=pivot[domain], name=domain,
+            x=period_starts, y=pivot[domain], name=domain,
             stackgroup="one", mode="lines",
         ))
-    fig.update_layout(title="Weekly Insertions by Domain (stacked)",
+    fig.update_layout(title=f"{adjective} Insertions by Domain (stacked)",
                       xaxis_title="Date", yaxis_title="Insertions",
                       height=420, hovermode="x unified")
     return fig

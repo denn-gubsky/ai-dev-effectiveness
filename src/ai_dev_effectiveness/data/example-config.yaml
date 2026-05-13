@@ -67,6 +67,8 @@ output:
   formats: ["html"]              # html | json | pdf
   out_dir: "."
   hide_code: true
+  chart_granularity: auto        # auto | daily | weekly
+                                 # "auto" = daily for projects < 2 months, weekly otherwise
 
 # Optional AI judge for diff-based effort estimation.
 judge:

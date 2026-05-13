@@ -146,6 +146,7 @@ class AnalysisResult:
             "by_complexity": _df_to_records(self.metrics.by_complexity)
                 if self.metrics.by_complexity is not None else [],
             "author_agent_matrix": _df_to_records(self.metrics.author_agent_matrix),
+            "granularity": getattr(self.metrics, "granularity", "weekly"),
             "weekly": _df_to_records(self.metrics.weekly),
             "judge_samples": self._judge_samples(limit=15),
         }
@@ -285,8 +286,17 @@ def analyze(
     # 8. metrics bundle
     project_months = _project_months(commits)
     loc_total = int(loc_df["total"].sum()) if not loc_df.empty else int(commits["insertions"].sum())
-    bundle = _metrics.build_metrics_bundle(commits, loc_total, project_months,
-                                           judge_summary_dict=judge_summary_dict)
+    chart_gran_cfg = cfg.output.chart_granularity
+    granularity = (
+        _metrics.choose_granularity(project_months)
+        if chart_gran_cfg == "auto"
+        else chart_gran_cfg
+    )
+    bundle = _metrics.build_metrics_bundle(
+        commits, loc_total, project_months,
+        judge_summary_dict=judge_summary_dict,
+        granularity=granularity,
+    )
 
     # 8b. resolve the actual-team description: user-supplied wins, else
     # auto-derive from author count + detected agents.
